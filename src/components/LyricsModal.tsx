@@ -75,7 +75,7 @@ function LyricsModal({
         onClick={(e) => e.stopPropagation()}
       >
         {/* 헤더: 트랙 번호 및 제목 */}
-        <div className="flex items-center justify-between p-5 border-b border-white/10">
+        <div className="flex flex-shrink-0 items-center justify-between p-5 border-b border-white/10">
           <div>
             <h2 className="font-heading font-bold text-xl text-white">
               Track {String(track.number).padStart(2, '0')}: {track.titleKo}
@@ -95,7 +95,7 @@ function LyricsModal({
 
         {/* 탭 바: 3개 레퍼런스 곡 전환 */}
         {songLyricsList.length > 0 && (
-          <div className="flex border-b border-white/5 px-5 overflow-x-auto">
+          <div className="flex flex-shrink-0 border-b border-white/5 px-5 overflow-x-auto">
             {songLyricsList.map((data, i) => (
               <button
                 key={i}
@@ -169,7 +169,7 @@ function LyricsModal({
 
         {/* 푸터: 링크 및 단일 다운로드 */}
         {currentLyrics?.lyrics && (
-          <div className="flex items-center justify-between p-4 border-t border-white/5 bg-white/[0.02]">
+          <div className="flex flex-shrink-0 items-center justify-between p-4 border-t border-white/5 bg-white/[0.02]">
             {currentLyrics.geniusUrl ? (
               <a
                 href={currentLyrics.geniusUrl}
