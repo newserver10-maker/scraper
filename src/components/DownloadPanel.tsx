@@ -3,15 +3,17 @@ import type { Track, LyricsData } from '../types';
 import {
   formatAllAsMarkdown,
   formatAllAsText,
+  formatAllAsJson,
+  printLyricsPdf,
   downloadBlob
 } from '../utils/clientFormatter';
 
 interface DownloadPanelProps {
   show: boolean;
-  format: 'md' | 'txt';
+  format: 'md' | 'txt' | 'json' | 'pdf';
   tracks: Track[];
   localCache: Record<string, LyricsData>;
-  onFormatChange: (format: 'md' | 'txt') => void;
+  onFormatChange: (format: 'md' | 'txt' | 'json' | 'pdf') => void;
   onClose: () => void;
 }
 
@@ -25,6 +27,8 @@ const BLOCKS = [
 const FORMAT_DESC = {
   md: '트랙별 메타데이터(BPM, 장르 등)와 가사들을 이쁜 마크다운 파일(.md)로 구조화합니다.',
   txt: '불필요한 서식을 제거하고 순수 가사 내용만 깔끔하게 구성된 파일(.txt)을 저장합니다.',
+  json: '트랙 정보 및 가사 메타데이터 전체를 기계 판독이 용이한 구조화된 JSON 파일(.json)로 내보냅니다.',
+  pdf: '한글 깨짐이 없는 최상의 화질을 보증하며, 트랙마다 새 페이지 처리가 적용된 가사집 PDF 파일로 인쇄 및 저장합니다.'
 } as const;
 
 function DownloadPanel({
@@ -42,9 +46,14 @@ function DownloadPanel({
     if (format === 'md') {
       const content = formatAllAsMarkdown(tracks, localCache);
       downloadBlob(content, 'anti-gravity-all-lyrics.md', 'text/markdown;charset=utf-8');
-    } else {
+    } else if (format === 'txt') {
       const content = formatAllAsText(tracks, localCache);
       downloadBlob(content, 'anti-gravity-all-lyrics.txt', 'text/plain;charset=utf-8');
+    } else if (format === 'json') {
+      const content = formatAllAsJson(tracks, localCache);
+      downloadBlob(content, 'anti-gravity-all-lyrics.json', 'application/json;charset=utf-8');
+    } else if (format === 'pdf') {
+      printLyricsPdf(tracks, localCache);
     }
   };
 
@@ -53,9 +62,14 @@ function DownloadPanel({
     if (format === 'md') {
       const content = formatAllAsMarkdown(tracks, localCache, blockId);
       downloadBlob(content, `anti-gravity-block-${blockId.toLowerCase()}-lyrics.md`, 'text/markdown;charset=utf-8');
-    } else {
+    } else if (format === 'txt') {
       const content = formatAllAsText(tracks, localCache, blockId);
       downloadBlob(content, `anti-gravity-block-${blockId.toLowerCase()}-lyrics.txt`, 'text/plain;charset=utf-8');
+    } else if (format === 'json') {
+      const content = formatAllAsJson(tracks, localCache, blockId);
+      downloadBlob(content, `anti-gravity-block-${blockId.toLowerCase()}-lyrics.json`, 'application/json;charset=utf-8');
+    } else if (format === 'pdf') {
+      printLyricsPdf(tracks, localCache, blockId);
     }
     setShowBlockDropdown(false);
   };
@@ -72,31 +86,23 @@ function DownloadPanel({
               내보내기 파일 포맷 선택
             </p>
 
+            {/* 4단 포맷 알약 버튼 토글 */}
             <div className="inline-flex rounded-lg bg-white/5 p-1 mb-2">
-              <button
-                onClick={() => onFormatChange('md')}
-                className={`
-                  px-4 py-1.5 rounded-md text-xs font-semibold transition-all duration-300
-                  ${format === 'md'
-                    ? 'bg-amber-500/20 text-amber-400'
-                    : 'text-gray-400 hover:text-gray-200'
-                  }
-                `}
-              >
-                마크다운 (MD)
-              </button>
-              <button
-                onClick={() => onFormatChange('txt')}
-                className={`
-                  px-4 py-1.5 rounded-md text-xs font-semibold transition-all duration-300
-                  ${format === 'txt'
-                    ? 'bg-amber-500/20 text-amber-400'
-                    : 'text-gray-400 hover:text-gray-200'
-                  }
-                `}
-              >
-                텍스트 (TXT)
-              </button>
+              {(['md', 'txt', 'json', 'pdf'] as const).map((fmt) => (
+                <button
+                  key={fmt}
+                  onClick={() => onFormatChange(fmt)}
+                  className={`
+                    px-3.5 py-1.5 rounded-md text-xs font-semibold transition-all duration-300 uppercase
+                    ${format === fmt
+                      ? 'bg-amber-500/20 text-amber-400'
+                      : 'text-gray-400 hover:text-gray-200'
+                    }
+                  `}
+                >
+                  {fmt}
+                </button>
+              ))}
             </div>
 
             <p className="text-[11px] text-gray-500 max-w-xl leading-relaxed">
@@ -110,7 +116,7 @@ function DownloadPanel({
               onClick={handleFullDownload}
               className="btn-amber text-xs font-bold py-2.5 px-4 rounded-lg flex items-center gap-1.5 shadow-lg shadow-amber-500/10"
             >
-              📥 전체 다운로드
+              📥 {format === 'pdf' ? 'PDF 인쇄 / 저장' : '전체 다운로드'}
             </button>
 
             {/* 블록별 내보내기 드롭다운 */}

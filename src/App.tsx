@@ -26,7 +26,7 @@ function App() {
   
   // UI 컨트롤 상태
   const [showDownload, setShowDownload] = useState(false);
-  const [exportFormat, setExportFormat] = useState<'md' | 'txt'>('md');
+  const [exportFormat, setExportFormat] = useState<'md' | 'txt' | 'json' | 'pdf'>('md');
   const [showSettings, setShowSettings] = useState(false);
   const [geniusToken, setGeniusToken] = useState<string>('');
   
