@@ -49,6 +49,21 @@ export function parsePlaylistText(text: string): Track[] {
         const parts = cleaned.split(/\s*[-–—~:]\s*/);
         if (parts.length >= 2) {
           const artist = parts[0].trim();
+          
+          // WHY: 줄바꿈 파싱 범위가 다음 속성 텍스트까지 넘어가 오용 파싱되는 것을 원천 방지하기 위해
+          //      기획안 본문의 세부 메타데이터 속성명은 아티스트명에서 블랙리스트 제외 처리합니다.
+          const blacklist = [
+            '공간 서사', '공간서사', '알고리즘', '보컬 가창법', '보컬가창법', 
+            '청각적 후킹', '청각적후킹', '주요 악기', '주요악기', '음악 장르', 
+            '음악장르', '템포', 'BPM', '가창자 성별', '가창자성별', '음악 구성', 
+            '음악구성', '프로젝트명', '부제', '기획의 본질', '기획의본질', 
+            '시각적 무드', '시각적무드', '영상 제목', '영상제목', '보컬 가창',
+            '보컬가창', '후킹 요소', '후킹요소', '연주법'
+          ];
+          
+          const isBlacklisted = blacklist.some((item) => artist.includes(item));
+          if (isBlacklisted) continue;
+          
           // 제목 안에 하이픈이 다시 들어갈 수 있으므로 join으로 원복
           const title = parts.slice(1).join('-').trim();
           const language = /[ㄱ-ㅎ|ㅏ-ㅣ|가-힣]/.test(artist + title) ? 'ko' : 'en';
