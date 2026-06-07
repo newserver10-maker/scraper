@@ -3,7 +3,7 @@ import type { Song, LyricsData } from '../types';
 // Genius API 상수
 const GENIUS_API_BASE = 'https://api.genius.com';
 
-// 요청 간 딜레이 함수 (과다 요청 방지)
+// 요청 간 딜레이 함수
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
@@ -22,8 +22,9 @@ export function saveGeniusToken(token: string): void {
 
 /**
  * Genius API를 통해 곡 검색
- * WHY: 브라우저 단독 환경이므로 fetch API를 사용하며,
- *      한국어 곡의 경우 영문 아티스트명으로 먼저 검색한 후 실패 시 원본 검색
+ * WHY: 브라우저 환경에서는 Genius API 직접 호출 시 CORS 에러가 발생하므로,
+ *      corsproxy.io 프록시를 통해 우회합니다. corsproxy.io는 원본 JSON 응답을
+ *      그대로 반환하므로 JSON.parse(contents) 과정 없이 직접 가용이 가능하여 빠르고 안전합니다.
  */
 export async function searchSongClient(
   artist: string,
@@ -35,16 +36,14 @@ export async function searchSongClient(
   }
 
   const query = `${artist} ${title}`;
+  // access_token을 URL 쿼리 파라미터에 포함하여 CORS 프록시를 태웁니다.
+  const targetUrl = `${GENIUS_API_BASE}/search?q=${encodeURIComponent(query)}&access_token=${token}`;
+  const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(targetUrl)}`;
   
   try {
-    const response = await fetch(`${GENIUS_API_BASE}/search?q=${encodeURIComponent(query)}`, {
-      headers: {
-        Authorization: `Bearer ${token}`
-      }
-    });
-
+    const response = await fetch(proxyUrl);
     if (!response.ok) {
-      throw new Error(`Genius API 검색 실패: ${response.statusText}`);
+      throw new Error(`Genius API 검색 프록시 실패: ${response.statusText}`);
     }
 
     const data = await response.json();
@@ -65,12 +64,12 @@ export async function searchSongClient(
 }
 
 /**
- * AllOrigins CORS 프록시를 통해 가사 페이지 HTML을 긁어와 브라우저 DOMParser로 파싱
- * WHY: 브라우저 환경에서는 Genius 가사 페이지의 CORS 보안 제한에 걸리므로
- *      무료 CORS 프록시 서비스인 AllOrigins를 경유하여 HTML 콘텐츠를 안전하게 획득
+ * CORS 프록시(corsproxy.io)를 통해 가사 페이지 HTML을 긁어와 브라우저 DOMParser로 파싱
+ * WHY: corsproxy.io는 타겟 주소의 원본 HTML을 그대로 반환하며 CORS 헤더만 교정해주므로
+ *      가장 빠르고 챌린지 차단 우회율이 높습니다.
  */
 export async function fetchLyricsFromUrlClient(url: string): Promise<string> {
-  const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`;
+  const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(url)}`;
   
   try {
     const response = await fetch(proxyUrl);
@@ -78,25 +77,40 @@ export async function fetchLyricsFromUrlClient(url: string): Promise<string> {
       throw new Error(`CORS 프록시 연결 실패: ${response.statusText}`);
     }
 
-    const data = await response.json();
-    const html = data.contents; // AllOrigins는 HTML 콘텐츠를contents 필드에 반환함
-    
+    const html = await response.text();
     if (!html) {
-      throw new Error('프록시로부터 페이지 데이터를 받아오지 못했습니다.');
+      throw new Error('프록시로부터 페이지 HTML을 받아오지 못했습니다.');
     }
 
     // 브라우저 DOMParser를 이용한 가사 파싱
     const parser = new DOMParser();
     const doc = parser.parseFromString(html, 'text/html');
+    
+    // Genius 가사 본문 영역 셀렉터
     const containers = doc.querySelectorAll('[data-lyrics-container="true"]');
 
     if (containers.length === 0) {
-      throw new Error('Genius 가사 레이아웃을 찾을 수 없습니다.');
+      // 대체 셀렉터 지원 (간혹 지니어스 레이아웃 변경 대응)
+      const altContainer = doc.querySelector('.lyrics') || doc.querySelector('[class^="Lyrics__Container"]');
+      if (!altContainer) {
+        // Cloudflare 로봇 차단 검출 및 피드백 제공
+        if (html.includes('Cloudflare') || html.includes('captcha') || html.includes('Security')) {
+          throw new Error('Genius 서버의 자동 로봇 차단(Cloudflare 챌린지)에 걸렸습니다. 브라우저에서 직접 Genius 웹사이트에 한 번 방문한 뒤 다시 스크래핑을 시도해 보세요.');
+        }
+        throw new Error('가사 텍스트 영역을 찾을 수 없습니다.');
+      }
+      
+      const clone = altContainer.cloneNode(true) as HTMLElement;
+      const brs = clone.querySelectorAll('br');
+      brs.forEach((br) => {
+        br.parentNode?.replaceChild(doc.createTextNode('\n'), br);
+      });
+      return clone.textContent?.trim() || '';
     }
 
     let lyricsText = '';
     containers.forEach((container) => {
-      // <br> 태그를 줄바꿈 문자(\n)로 가공하여 줄 구분을 유지합니다.
+      // <br> 태그를 줄바꿈 문자(\n)로 가공
       const clone = container.cloneNode(true) as HTMLElement;
       const brs = clone.querySelectorAll('br');
       brs.forEach((br) => {
@@ -129,7 +143,7 @@ export async function scrapeSongLyricsClient(
     const engArtist = englishNameMatch[1];
     const engTitle = englishTitle ? englishTitle[1] : title;
     searchResult = await searchSongClient(engArtist, engTitle, token);
-    await delay(1000); // 레이트 리밋 준수
+    await delay(1000);
   }
 
   // 2차: 실패 시 원본 한글명으로 검색 시도
