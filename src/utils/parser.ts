@@ -2,8 +2,9 @@ import type { Track, Song } from '../types';
 
 /**
  * 기획안 텍스트를 파싱하여 구조화된 Track[] 데이터로 변환합니다.
- * WHY: 사용자가 새로운 기획안 파일(텍스트)을 붙여넣거나 로드했을 때,
- *      프로그램이 트랙 번호, 제목, 장르, BPM, 레퍼런스 곡 목록을 자동으로 추출하기 위함
+ * WHY: 사용자가 새로운 기획안 텍스트나 메모장 파일을 업로드했을 때,
+ *      멀티라인(줄바꿈)으로 나열되거나 하이픈 이외의 다양한 대시 기호가 섞여 있어도
+ *      누락 없이 3~5곡 이상의 레퍼런스 곡들을 완벽하게 정규화하여 분석하기 위함
  */
 export function parsePlaylistText(text: string): Track[] {
   const tracks: Track[] = [];
@@ -15,7 +16,6 @@ export function parsePlaylistText(text: string): Track[] {
     if (!block.trim().startsWith('Track')) continue;
     
     // 1. 트랙 번호 및 한글/영문 제목 추출
-    // 예: "Track 01: 관제탑의 불빛 (Tower Lights)"
     const headerMatch = block.match(/Track (\d+):\s*([^\(\n\r]+)(?:\(([^\)\n\r]+)\))?/);
     if (!headerMatch) continue;
     
@@ -24,31 +24,33 @@ export function parsePlaylistText(text: string): Track[] {
     const titleEn = headerMatch[3] ? headerMatch[3].trim() : titleKo;
     
     // 2. 장르 추출
-    // 예: "● 음악 장르: Ambient Pop"
     const genreMatch = block.match(/(?:장르|음악 장르):\s*([^\n\r]+)/);
     const genre = genreMatch ? genreMatch[1].trim() : '알 수 없음';
     
     // 3. BPM 추출
-    // 예: "● 템포: 80 BPM"
     const bpmMatch = block.match(/(?:템포|BPM):\s*(\d+)/);
     const bpm = bpmMatch ? parseInt(bpmMatch[1], 10) : 80;
     
-    // 4. 가사 레퍼런스(아티스트 - 곡명) 추출
-    // 예: "● 가사 레퍼런스: 오존 (O3ohn) - Down, Cigarettes After Sex - K., Radiohead - Lift."
-    const refMatch = block.match(/(?:가사 레퍼런스|레퍼런스):\s*([^\n\r]+)/);
+    // 4. 가사 레퍼런스 추출
+    // WHY: 레퍼런스 곡들이 줄바꿈(\n)되어 여러 행으로 나열되거나 다른 기호가 섞여 있는 경우를 위해
+    //      다음 불릿 기호(●) 또는 다음 트랙 표시가 오기 전까지의 텍스트 블록 전체를 매칭합니다.
+    const refMatch = block.match(/(?:가사 레퍼런스|레퍼런스):\s*([\s\S]*?)(?=\n\s*●|\n\s*Track|$)/);
     const references: Song[] = [];
     
     if (refMatch) {
-      // 쉼표(,)나 마침표(.)를 기준으로 여러 곡들을 분리합니다.
-      const songsRaw = refMatch[1].split(/[,.]/);
+      // 콤마(,), 마침표(.), 세미콜론(;), 줄바꿈(\n)을 모두 구분자로 사용하여 곡들을 쪼갭니다.
+      const songsRaw = refMatch[1].split(/[,.;\n\r]/);
       for (const songRaw of songsRaw) {
-        const parts = songRaw.split('-');
+        // 앞뒤 공백 제거 및 행 첫머리에 오는 대시(-), 불릿(•, * 등) 리스트 표시 기호 삭제
+        const cleaned = songRaw.trim().replace(/^[-•*#]\s*/, '');
+        if (!cleaned) continue;
+        
+        // 아티스트와 제목을 가르는 구분자를 하이픈(-) 이외에 다양한 대시 기호(–, —, ~) 및 콜론(:)까지 허용
+        const parts = cleaned.split(/\s*[-–—~:]\s*/);
         if (parts.length >= 2) {
           const artist = parts[0].trim();
-          // 제목 내에 대시(-)가 있을 수도 있으므로, 첫 번째를 제외한 나머지를 다시 join합니다.
+          // 제목 안에 하이픈이 다시 들어갈 수 있으므로 join으로 원복
           const title = parts.slice(1).join('-').trim();
-          
-          // 아티스트명과 제목에 한글이 포함되어 있는지 확인하여 언어 코드를 판단합니다.
           const language = /[ㄱ-ㅎ|ㅏ-ㅣ|가-힣]/.test(artist + title) ? 'ko' : 'en';
           
           if (artist && title) {
@@ -75,6 +77,5 @@ export function parsePlaylistText(text: string): Track[] {
     });
   }
   
-  // 트랙 번호 순으로 정렬하여 반환
   return tracks.sort((a, b) => a.number - b.number);
 }
