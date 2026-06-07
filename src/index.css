@@ -1,0 +1,128 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ===== 기본 설정 ===== */
+
+/* 부드러운 스크롤 — 모달 열릴 때 앵커 이동 등에 자연스러운 UX 제공 */
+html {
+  scroll-behavior: smooth;
+}
+
+/* 야간비행 테마 배경 그라데이션 — 깊은 남색에서 약간 밝은 남색으로 */
+body {
+  background: linear-gradient(180deg, #050810 0%, #0A0E1A 50%, #0F1526 100%);
+  min-height: 100vh;
+  font-family: 'Inter', sans-serif;
+  color: #E2E8F0;
+}
+
+/* ===== 커스텀 스크롤바 — 다크 테마에 어울리는 얇은 스크롤바 ===== */
+/* Webkit 기반 브라우저(Chrome, Edge, Safari)에서만 적용 */
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: rgba(10, 14, 26, 0.5);
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 140, 66, 0.3);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 140, 66, 0.5);
+}
+
+/* Firefox 스크롤바 — 최소한의 스타일링만 가능 */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 140, 66, 0.3) rgba(10, 14, 26, 0.5);
+}
+
+/* ===== 커스텀 유틸리티 클래스 ===== */
+
+@layer components {
+  /* 글래스모피즘 카드 — 반투명 배경 + 블러 + 미세한 테두리로 깊이감 표현 */
+  .glass-card {
+    @apply bg-white/5 backdrop-blur-md border border-white/10 rounded-xl;
+    transition: all 0.3s ease;
+  }
+
+  /* 호버 시 앰버 글로우 테두리 — 카드에 생동감 부여 */
+  .glass-card-hover:hover {
+    @apply border-amber-500/40;
+    box-shadow: 0 0 20px rgba(255, 140, 66, 0.15),
+                0 0 40px rgba(255, 140, 66, 0.05);
+  }
+
+  /* 앰버 글로우 효과 — 중요한 요소에 시선 유도 */
+  .glow-amber {
+    box-shadow: 0 0 15px rgba(255, 140, 66, 0.25),
+                0 0 30px rgba(255, 140, 66, 0.1);
+  }
+
+  /* 텍스트 글로우 — 활성 메뉴, 강조 텍스트에 사용 */
+  .text-glow-amber {
+    text-shadow: 0 0 10px rgba(255, 140, 66, 0.5),
+                 0 0 20px rgba(255, 140, 66, 0.2);
+  }
+
+  /* 앰버 그라데이션 버튼 — 주요 CTA에 사용 */
+  .btn-amber {
+    @apply px-5 py-2.5 rounded-lg font-medium text-white transition-all duration-300;
+    background: linear-gradient(135deg, #FF8C42, #FFB347);
+  }
+
+  .btn-amber:hover {
+    @apply shadow-lg;
+    background: linear-gradient(135deg, #E67A30, #FF8C42);
+    box-shadow: 0 0 20px rgba(255, 140, 66, 0.3);
+  }
+
+  .btn-amber:active {
+    transform: scale(0.97);
+  }
+
+  /* 앰버 그라데이션 프로그레스 바 배경 */
+  .progress-amber {
+    background: linear-gradient(90deg, #FF8C42, #FFB347);
+  }
+}
+
+/* ===== 호버 플로트 애니메이션 ===== */
+/* tailwind.config.js에 정의된 float 키프레임과 연동 — 호버 시에만 작동 */
+
+.hover-float {
+  transition: transform 0.3s ease, box-shadow 0.3s ease, border-color 0.3s ease;
+}
+
+.hover-float:hover {
+  animation: float 3s ease-in-out infinite;
+}
+
+/* ===== 트랜지션 유틸리티 ===== */
+
+/* 페이드인 — 컴포넌트 마운트 시 자연스러운 등장 */
+.animate-enter {
+  animation: fade-in 0.3s ease-out forwards;
+}
+
+@keyframes fade-in {
+  0% { opacity: 0; transform: translateY(8px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+
+/* 슬라이드업 — 모달, 패널 등장 시 사용 */
+.animate-slide-up {
+  animation: slide-up 0.4s ease-out forwards;
+}
+
+@keyframes slide-up {
+  0% { transform: translateY(100%); opacity: 0; }
+  100% { transform: translateY(0); opacity: 1; }
+}
