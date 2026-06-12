@@ -113,6 +113,23 @@ function App() {
     }
   };
 
+  // === 전체 데이터 리셋 (기획안 및 수집 가사 데이터 전체 초기화) ===
+  const handleResetAll = () => {
+    if (
+      window.confirm(
+        '🚨 경고: 수집된 모든 가사 데이터와 현재 로드된 기획안이 완전히 삭제되고 기본 야간비행 20트랙으로 리셋됩니다. 진행하시겠습니까?'
+      )
+    ) {
+      setTracks(defaultTracks);
+      setLocalCache({});
+      localStorage.removeItem('custom_tracks');
+      localStorage.removeItem('lyrics_cache');
+      setShowUploadArea(false);
+      setSelectedTrack(null);
+      alert('모든 기획안 및 가사 데이터가 성공적으로 리셋되었습니다!');
+    }
+  };
+
   // === 파일 드롭/업로드 처리 ===
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -349,6 +366,14 @@ function App() {
             </div>
             
             <div className="flex items-center gap-3">
+              {/* 전체 데이터 리셋 */}
+              <button
+                onClick={handleResetAll}
+                className="px-3.5 py-2 glass-card glass-card-hover text-xs font-semibold text-red-400 hover:text-red-300 border border-red-500/30 hover:border-red-500/50 rounded-lg transition-all"
+              >
+                🚨 전체 데이터 리셋
+              </button>
+
               {/* 기획안 동적 로드 토글 */}
               <button
                 onClick={() => setShowUploadArea(!showUploadArea)}

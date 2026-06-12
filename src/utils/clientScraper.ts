@@ -3,6 +3,32 @@ import type { Song, LyricsData } from '../types';
 // Genius API 상수
 const GENIUS_API_BASE = 'https://api.genius.com';
 
+// === 한영 아티스트 번역 맵 ===
+// WHY: Genius에는 한국 아티스트가 영문명으로만 등록되어 있거나, 한글/영문 혼용으로 
+//      등록되어 있어 단순 토큰 매칭이 불가능한 경우가 많으므로 하드코딩 매핑 사전을 둡니다.
+const ARTIST_TRANSLATION_MAP: Record<string, string[]> = {
+  '검정치마': ['the black skirts', 'black skirts'],
+  '오존': ['o3ohn'],
+  '아이유': ['iu'],
+  '백예린': ['yerin baek', 'baek yerin'],
+  '혁오': ['hyukoh'],
+  '잔나비': ['jannabi'],
+  '볼빨간사춘기': ['bolbbalgan4', 'bol4', 'bolbbalgan puberty'],
+  '방탄소년단': ['bts'],
+  '적재': ['jukjae'],
+  '이소라': ['lee sora', 'lee so ra'],
+  '10cm': ['십센치'],
+  '선우정아': ['sunwoojunga', 'sunwoo junga'],
+  '새소년': ['se so neon', 'sesoneon'],
+  '기리보이': ['giriboy'],
+  '우원재': ['woo', 'woo won jae'],
+  '카더가든': ['car the garden'],
+  '자이언티': ['zion.t', 'zion t'],
+  '크러쉬': ['crush'],
+  '태연': ['taeyeon'],
+  '악뮤': ['akmu', 'akdong musician', '악동뮤지션'],
+};
+
 // === 유사도 검증 유틸리티 ===
 
 /**
@@ -63,6 +89,110 @@ function containsSubstring(query: string, target: string): boolean {
   return t.includes(q) || q.includes(t);
 }
 
+/**
+ * 두 아티스트가 동일인인지 엄격히 판정
+ * WHY: 아티스트가 아예 다른데 곡명만 같다는 이유로 엉뚱한 가사를 긁어오는 문제를 
+ *      방지하기 위해, 한글/영문 대응, Jaccard 유사도, 공백 제거 일치 여부를 복합 검증합니다.
+ */
+function checkArtistMatch(queryArtist: string, resultArtist: string, originalArtist: string = ''): boolean {
+  const qClean = normalizeForComparison(queryArtist);
+  const rClean = normalizeForComparison(resultArtist);
+  const origClean = originalArtist ? normalizeForComparison(originalArtist) : '';
+
+  const qNoSpace = qClean.replace(/\s+/g, '');
+  const rNoSpace = rClean.replace(/\s+/g, '');
+  const origNoSpace = origClean.replace(/\s+/g, '');
+
+  // 1. 공백 제거 후 완전 일치 또는 포함 관계
+  if (qNoSpace === rNoSpace || (origNoSpace && origNoSpace.includes(rNoSpace)) || rNoSpace.includes(qNoSpace)) {
+    return true;
+  }
+
+  // 2. Jaccard 유사도 확인
+  const similarityWithQuery = calculateSimilarity(queryArtist, resultArtist);
+  const similarityWithOrig = originalArtist ? calculateSimilarity(originalArtist, resultArtist) : 0;
+  if (similarityWithQuery >= 0.4 || similarityWithOrig >= 0.4) {
+    return true;
+  }
+
+  // 3. 번역 맵 매칭 확인 (예: 검정치마 <-> The Black Skirts)
+  const keys = Object.keys(ARTIST_TRANSLATION_MAP);
+  for (const key of keys) {
+    const keyClean = normalizeForComparison(key).replace(/\s+/g, '');
+    const values = ARTIST_TRANSLATION_MAP[key].map(v => normalizeForComparison(v).replace(/\s+/g, ''));
+
+    // 검색어나 원본에 한글명이 있고 결과가 영문명에 매핑되는 경우
+    const inputMatchesKey = qNoSpace.includes(keyClean) || (origNoSpace && origNoSpace.includes(keyClean));
+    const resultMatchesValue = values.some(val => rNoSpace.includes(val) || val.includes(rNoSpace));
+
+    if (inputMatchesKey && resultMatchesValue) {
+      return true;
+    }
+
+    // 그 반대인 경우 (검색어에 영문명이 있고 결과가 한글명에 매핑되는 경우)
+    const inputMatchesValue = values.some(val => qNoSpace.includes(val) || (origNoSpace && origNoSpace.includes(val)));
+    const resultMatchesKey = rNoSpace.includes(keyClean) || keyClean.includes(rNoSpace);
+
+    if (inputMatchesValue && resultMatchesKey) {
+      return true;
+    }
+  }
+
+  // 4. 부분 문자열 포함 관계 (최소 2글자 이상 일치 필요, '오' 같은 1글자 매칭 방지)
+  if (qClean.length >= 2 && rClean.length >= 2) {
+    if (qClean.includes(rClean) || rClean.includes(qClean)) {
+      return true;
+    }
+  }
+  if (origClean.length >= 2 && rClean.length >= 2) {
+    if (origClean.includes(rClean) || rClean.includes(origClean)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+/**
+ * 곡명이 일치하는지 엄격히 판정
+ * WHY: 아티스트는 일치하더라도 아예 다른 트랙의 가사를 긁어오는 문제를 방지합니다.
+ */
+function checkTitleMatch(queryTitle: string, resultTitle: string, originalTitle: string = ''): boolean {
+  const qClean = normalizeForComparison(queryTitle);
+  const rClean = normalizeForComparison(resultTitle);
+  const origClean = originalTitle ? normalizeForComparison(originalTitle) : '';
+
+  const qNoSpace = qClean.replace(/\s+/g, '');
+  const rNoSpace = rClean.replace(/\s+/g, '');
+  const origNoSpace = origClean.replace(/\s+/g, '');
+
+  // 1. 공백 제거 후 완전 일치
+  if (qNoSpace === rNoSpace || (origNoSpace && origNoSpace.includes(rNoSpace)) || rNoSpace.includes(qNoSpace)) {
+    return true;
+  }
+
+  // 2. Jaccard 유사도 확인 (곡명은 0.35 이상)
+  const similarityWithQuery = calculateSimilarity(queryTitle, resultTitle);
+  const similarityWithOrig = originalTitle ? calculateSimilarity(originalTitle, resultTitle) : 0;
+  if (similarityWithQuery >= 0.35 || similarityWithOrig >= 0.35) {
+    return true;
+  }
+
+  // 3. 부분 문자열 포함 관계 (최소 2글자 이상 일치)
+  if (qClean.length >= 2 && rClean.length >= 2) {
+    if (qClean.includes(rClean) || rClean.includes(qClean)) {
+      return true;
+    }
+  }
+  if (origClean.length >= 2 && rClean.length >= 2) {
+    if (origClean.includes(rClean) || rClean.includes(origClean)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 // 요청 간 딜레이 함수
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -89,20 +219,20 @@ export function saveGeniusToken(token: string): void {
 export async function searchSongClient(
   artist: string,
   title: string,
-  token: string
+  token: string,
+  originalArtist?: string,
+  originalTitle?: string
 ): Promise<{ id: number; url: string; artist: string; title: string } | null> {
   if (!token) {
     throw new Error('Genius API 토큰이 설정되지 않았습니다. 설정 패널에서 토큰을 입력해 주세요.');
   }
 
   const query = `${artist} ${title}`;
-  // access_token을 URL 쿼리 파라미터에 포함하여 CORS 프록시를 태웁니다.
   const targetUrl = `${GENIUS_API_BASE}/search?q=${encodeURIComponent(query)}&access_token=${token}`;
   const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(targetUrl)}`;
   
-  // WHY: 유사도 판정 임계값 0.3 — 이보다 낮으면 완전히 다른 곡으로 간주
-  //      토큰 기반 Jaccard이므로 아티스트명 한 단어만 일치해도 ~0.3 정도 나옵니다.
-  const SIMILARITY_THRESHOLD = 0.3;
+  // WHY: 아티스트와 타이틀이 모두 검증을 통과한 것에 대해, 최소 품질을 충족하는지 판단할 최종 임계치
+  const SIMILARITY_THRESHOLD = 0.25;
 
   try {
     const response = await fetch(proxyUrl);
@@ -114,9 +244,7 @@ export async function searchSongClient(
     const hits = data?.response?.hits;
     if (!hits || hits.length === 0) return null;
 
-    // 상위 5개 결과를 대상으로 유사도 비교 후 최적 결과 선택
-    // WHY: hits[0]만 사용하면 "오존 - Down" 검색 시 "Jay Sean - Down" 같은
-    //      인기곡이 먼저 올라와 엉뚱한 가사를 수집하는 문제가 발생합니다.
+    // 상위 5개 결과를 대상으로 엄격 매칭 비교 수행
     const candidates = hits.slice(0, 5);
     let bestMatch: typeof hits[0]['result'] | null = null;
     let bestScore = -1;
@@ -126,17 +254,24 @@ export async function searchSongClient(
       const resultArtist = result.primary_artist?.name ?? '';
       const resultTitle = result.title ?? '';
 
-      // 아티스트 유사도와 곡명 유사도를 각각 계산 후 가중 합산
+      // 아티스트명과 곡명이 개별적으로 일치하는지 엄격히 상호 대조
+      const isArtistMatched = checkArtistMatch(artist, resultArtist, originalArtist);
+      const isTitleMatched = checkTitleMatch(title, resultTitle, originalTitle);
+
+      // WHY: 아티스트나 곡명 중 하나라도 검증을 통과하지 못하면 후보군에서 즉시 제외시킵니다.
+      //      이로써 아티스트가 아예 다른데 제목만 같아서 잘못 매칭되는 경우를 완전 차단합니다.
+      if (!isArtistMatched || !isTitleMatched) {
+        continue;
+      }
+
+      // 최종 최적 후보 판정을 위한 수치화 계산
       const artistSim = calculateSimilarity(artist, resultArtist);
       const titleSim = calculateSimilarity(title, resultTitle);
       
-      // 부분 문자열 포함 여부로 보너스 점수 부여 (한국 아티스트명 대응)
-      // WHY: 한국 아티스트가 Genius에 영문/한글 혼용으로 등록되어 있을 수 있으므로
-      //      토큰 매칭이 안 돼도 부분 포함이면 가산합니다.
       const artistContains = containsSubstring(artist, resultArtist) ? 0.3 : 0;
       const titleContains = containsSubstring(title, resultTitle) ? 0.3 : 0;
 
-      // 아티스트(40%) + 곡명(60%) 가중치 — 곡명이 더 중요
+      // 아티스트(40%) + 곡명(60%) 가중치
       const combinedScore = Math.max(
         artistSim * 0.4 + titleSim * 0.6,
         artistContains * 0.4 + titleContains * 0.6
@@ -174,8 +309,6 @@ export async function searchSongClient(
 
 /**
  * CORS 프록시(corsproxy.io)를 통해 가사 페이지 HTML을 긁어와 브라우저 DOMParser로 파싱
- * WHY: corsproxy.io는 타겟 주소의 원본 HTML을 그대로 반환하며 CORS 헤더만 교정해주므로
- *      가장 빠르고 챌린지 차단 우회율이 높습니다.
  */
 export async function fetchLyricsFromUrlClient(url: string): Promise<string> {
   const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(url)}`;
@@ -191,18 +324,13 @@ export async function fetchLyricsFromUrlClient(url: string): Promise<string> {
       throw new Error('프록시로부터 페이지 HTML을 받아오지 못했습니다.');
     }
 
-    // 브라우저 DOMParser를 이용한 가사 파싱
     const parser = new DOMParser();
     const doc = parser.parseFromString(html, 'text/html');
-    
-    // Genius 가사 본문 영역 셀렉터
     const containers = doc.querySelectorAll('[data-lyrics-container="true"]');
 
     if (containers.length === 0) {
-      // 대체 셀렉터 지원 (간혹 지니어스 레이아웃 변경 대응)
       const altContainer = doc.querySelector('.lyrics') || doc.querySelector('[class^="Lyrics__Container"]');
       if (!altContainer) {
-        // Cloudflare 로봇 차단 검출 및 피드백 제공
         if (html.includes('Cloudflare') || html.includes('captcha') || html.includes('Security')) {
           throw new Error('Genius 서버의 자동 로봇 차단(Cloudflare 챌린지)에 걸렸습니다. 브라우저에서 직접 Genius 웹사이트에 한 번 방문한 뒤 다시 스크래핑을 시도해 보세요.');
         }
@@ -219,7 +347,6 @@ export async function fetchLyricsFromUrlClient(url: string): Promise<string> {
 
     let lyricsText = '';
     containers.forEach((container) => {
-      // <br> 태그를 줄바꿈 문자(\n)로 가공
       const clone = container.cloneNode(true) as HTMLElement;
       const brs = clone.querySelectorAll('br');
       brs.forEach((br) => {
@@ -247,34 +374,28 @@ export async function scrapeSongLyricsClient(
   const englishNameMatch = artist.match(/\(([^)]+)\)/);
   const englishTitle = title.match(/\(([^)]+)\)/);
   
-  // 괄호를 제거한 순수 아티스트명/곡명 (2차 검색용)
   const cleanArtist = artist.replace(/\s*\(.*?\)\s*/g, '').trim();
   const cleanTitle = title.replace(/\s*\(.*?\)\s*/g, '').trim();
 
   let searchResult = null;
 
-  // 1차: 괄호 안 영문명이 있으면 그걸로 검색 시도
-  // WHY: Genius에 영문명으로 등록된 한국 아티스트가 많으므로 가장 먼저 시도
+  // 1차: 괄호 안 영문명이 있으면 그걸로 검색 시도 (원본 artist, title을 대조용 인자로 전달)
   if (englishNameMatch) {
     const engArtist = englishNameMatch[1];
     const engTitle = englishTitle ? englishTitle[1] : cleanTitle;
-    searchResult = await searchSongClient(engArtist, engTitle, token);
+    searchResult = await searchSongClient(engArtist, engTitle, token, artist, title);
     await delay(1000);
   }
 
   // 2차: 괄호를 제거한 순수 아티스트명 + 순수 곡명으로 검색
-  // WHY: 1차 실패 시, "오존 (O3ohn)"에서 "오존"만 추출하여 검색하면
-  //      Genius의 한글 인식 결과를 활용할 수 있습니다.
   if (!searchResult && cleanArtist) {
-    searchResult = await searchSongClient(cleanArtist, cleanTitle, token);
+    searchResult = await searchSongClient(cleanArtist, cleanTitle, token, artist, title);
     await delay(1000);
   }
 
   // 3차: 원본 문자열 전체를 그대로 검색 (괄호 포함)
-  // WHY: "검정치마 - 섬 (Island)"처럼 괄호 안 부제가 Genius 곡명과
-  //      더 정확히 매칭되는 경우가 있으므로 최후의 폴백으로 사용
   if (!searchResult) {
-    searchResult = await searchSongClient(artist, title, token);
+    searchResult = await searchSongClient(artist, title, token, artist, title);
     await delay(1000);
   }
 
@@ -282,7 +403,6 @@ export async function scrapeSongLyricsClient(
     return { lyrics: null, url: null };
   }
 
-  // 가사 파싱
   const lyrics = await fetchLyricsFromUrlClient(searchResult.url);
   return { lyrics, url: searchResult.url };
 }
