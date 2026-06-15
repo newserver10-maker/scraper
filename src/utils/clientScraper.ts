@@ -27,7 +27,121 @@ const ARTIST_TRANSLATION_MAP: Record<string, string[]> = {
   '크러쉬': ['crush'],
   '태연': ['taeyeon'],
   '악뮤': ['akmu', 'akdong musician', '악동뮤지션'],
+  '림킴': ['lim kim', 'limkim'],
+  '미노이': ['meenoi', 'minoi'],
+  '권진아': ['kwon jin ah', 'kwon jinah'],
+  '샘김': ['sam kim', 'samkim'],
+  '신해경': ['shin hae gyeong', 'shin hae kyung'],
+  '안다영': ['ahn da young', 'ahn dayoung'],
+  '김광석': ['kim kwang seok', 'kim kwangseok'],
+  '곽진언': ['kwak jin eon', 'kwak jineon'],
+  '디오': ['d.o.', 'do', 'd.o. (exo)'],
+  '루시드폴': ['lucid fall'],
 };
+
+// === 한글 로마자 변환기 ===
+// WHY: 하드코딩 사전에 등록되지 않은 새로운 한글 아티스트나 곡명이 들어오더라도,
+//      영어 발음 표기(로마자)로 변환해 Genius의 영문 표기와 대조할 수 있도록 동적 변환기를 둡니다.
+function romanizeHangul(text: string): string {
+  const chosungMap = [
+    'g', 'kk', 'n', 'd', 'tt', 'r', 'm', 'b', 'pp',
+    's', 'ss', '', 'j', 'jj', 'ch', 'k', 't', 'p', 'h'
+  ];
+  const jungsungMap = [
+    'a', 'ae', 'ya', 'yae', 'eo', 'e', 'ye', 'ye', 'o', 'wa',
+    'wae', 'oe', 'yo', 'u', 'wo', 'we', 'wi', 'yu', 'eu', 'ui', 'i'
+  ];
+  const jongsungMap = [
+    '', 'g', 'kk', 'gs', 'n', 'nj', 'nh', 'd', 'l', 'lg',
+    'lm', 'lb', 'ls', 'lt', 'lp', 'lh', 'm', 'b', 'bs',
+    's', 'ss', 'ng', 'j', 'ch', 'k', 't', 'p', 'h'
+  ];
+
+  let result = '';
+  for (let i = 0; i < text.length; i++) {
+    const code = text.charCodeAt(i);
+    if (code >= 0xAC00 && code <= 0xD7A3) {
+      const hangulCode = code - 0xAC00;
+      const cho = Math.floor(hangulCode / 588);
+      const jung = Math.floor((hangulCode % 588) / 28);
+      const jong = hangulCode % 28;
+
+      result += chosungMap[cho] + jungsungMap[jung] + jongsungMap[jong];
+    } else {
+      result += text[i];
+    }
+  }
+  return result;
+}
+
+// 로마자 문자열 간소화 (발음 완화 규칙)
+// WHY: 'seonwoojunga' <-> 'sunwoojunga'처럼 모음/자음 표기 편차를 줄이기 위해 
+//      발음상 동치(eo->u, r->l 등)를 적용해 정밀 대조합니다.
+function simplifyRoman(str: string): string {
+  return str
+    .toLowerCase()
+    .replace(/eo/g, 'u')
+    .replace(/wo/g, 'u')
+    .replace(/oo/g, 'u')
+    .replace(/wi/g, 'u')
+    .replace(/wa/g, 'a')
+    .replace(/ae/g, 'e')
+    .replace(/oe/g, 'e')
+    .replace(/ee/g, 'i')
+    .replace(/r/g, 'l')
+    .replace(/g/g, 'k')
+    .replace(/d/g, 't')
+    .replace(/b/g, 'p')
+    .replace(/h/g, '') // ahn -> an, ah -> a 생략 대응
+    .replace(/\s+/g, '')
+    .replace(/[^\w]/g, '');
+}
+
+// 로마자 발음 기반 매칭 여부 판단
+function isRomanizedMatch(hangul: string, english: string): boolean {
+  // 한글이 아예 포함되지 않은 문자열은 로마자 변환 비교가 무의미하므로 제외
+  if (!/[ㄱ-ㅎ|ㅏ-ㅣ|가-힣]/.test(hangul)) return false;
+  
+  const rom = romanizeHangul(hangul);
+  const simRom = simplifyRoman(rom);
+  const simEng = simplifyRoman(english);
+  
+  return simRom.length >= 2 && simEng.length >= 2 && 
+    (simRom === simEng || simRom.includes(simEng) || simEng.includes(simRom));
+}
+
+// === 괄호 내용 추출 및 멀티 매칭 ===
+// WHY: '림킴 (Lim Kim)'이나 '섬 (Island)'처럼 괄호 안에 번역명/부제가 포함된 경우,
+//      괄호를 지워버리지 않고 괄호 안팎의 텍스트를 모두 개별 이름 후보로 추출해 비교합니다.
+function extractAlternativeNames(name: string): string[] {
+  if (!name) return [];
+  const results: string[] = [name];
+  
+  const regex = /([^([]+)(?:\(([^)]+)\)|\[([^\]]+)\])/;
+  const match = name.match(regex);
+  if (match) {
+    if (match[1]) results.push(match[1].trim());
+    const inside = match[2] || match[3];
+    if (inside) results.push(inside.trim());
+  }
+  
+  return Array.from(new Set(results));
+}
+
+// === 번역 맵 매칭 검사 ===
+function checkTranslationMap(name1: string, name2: string): boolean {
+  const n1Clean = normalizeForComparison(name1).replace(/\s+/g, '');
+  const n2Clean = normalizeForComparison(name2).replace(/\s+/g, '');
+
+  for (const [ko, engList] of Object.entries(ARTIST_TRANSLATION_MAP)) {
+    const koClean = normalizeForComparison(ko).replace(/\s+/g, '');
+    const engCleanList = engList.map(e => normalizeForComparison(e).replace(/\s+/g, ''));
+
+    if (n1Clean === koClean && engCleanList.includes(n2Clean)) return true;
+    if (n2Clean === koClean && engCleanList.includes(n1Clean)) return true;
+  }
+  return false;
+}
 
 // === 유사도 검증 유틸리티 ===
 
@@ -89,64 +203,127 @@ function containsSubstring(query: string, target: string): boolean {
   return t.includes(q) || q.includes(t);
 }
 
+// 단일 아티스트명 매칭 판정
+function isSingleArtistMatch(query: string, result: string, original: string = ''): boolean {
+  const qAlternatives = extractAlternativeNames(query);
+  const rAlternatives = extractAlternativeNames(result);
+  const oAlternatives = original ? extractAlternativeNames(original) : [];
+
+  for (const qAlt of qAlternatives) {
+    for (const rAlt of rAlternatives) {
+      const qClean = normalizeForComparison(qAlt);
+      const rClean = normalizeForComparison(rAlt);
+      const qNoSpace = qClean.replace(/\s+/g, '');
+      const rNoSpace = rClean.replace(/\s+/g, '');
+
+      // 1. 공백 제거 후 완전 일치
+      if (qNoSpace === rNoSpace && qNoSpace.length > 0) return true;
+
+      // 2. 번역 사전을 통한 매칭
+      if (checkTranslationMap(qAlt, rAlt)) return true;
+
+      // 3. 로마자 발음 대조 매칭
+      if (isRomanizedMatch(qAlt, rAlt)) return true;
+
+      // 4. Jaccard 유사도 확인
+      if (calculateSimilarity(qAlt, rAlt) >= 0.4) return true;
+
+      // 5. 부분 문자열 포함 관계
+      if (qClean.length >= 2 && rClean.length >= 2) {
+        if (qClean.includes(rClean) || rClean.includes(qClean)) return true;
+      }
+    }
+  }
+
+  for (const oAlt of oAlternatives) {
+    for (const rAlt of rAlternatives) {
+      const oClean = normalizeForComparison(oAlt);
+      const rClean = normalizeForComparison(rAlt);
+      const oNoSpace = oClean.replace(/\s+/g, '');
+      const rNoSpace = rClean.replace(/\s+/g, '');
+
+      if (oNoSpace === rNoSpace && oNoSpace.length > 0) return true;
+      if (checkTranslationMap(oAlt, rAlt)) return true;
+      if (isRomanizedMatch(oAlt, rAlt)) return true;
+      if (calculateSimilarity(oAlt, rAlt) >= 0.4) return true;
+      if (oClean.length >= 2 && rClean.length >= 2) {
+        if (oClean.includes(rClean) || rClean.includes(oClean)) return true;
+      }
+    }
+  }
+
+  return false;
+}
+
 /**
  * 두 아티스트가 동일인인지 엄격히 판정
  * WHY: 아티스트가 아예 다른데 곡명만 같다는 이유로 엉뚱한 가사를 긁어오는 문제를 
  *      방지하기 위해, 한글/영문 대응, Jaccard 유사도, 공백 제거 일치 여부를 복합 검증합니다.
  */
 function checkArtistMatch(queryArtist: string, resultArtist: string, originalArtist: string = ''): boolean {
-  const qClean = normalizeForComparison(queryArtist);
-  const rClean = normalizeForComparison(resultArtist);
-  const origClean = originalArtist ? normalizeForComparison(originalArtist) : '';
+  // '&', 'x', 'and', 'with', ',' 단위로 콜라보레이터 분할 대조
+  const queryMembers = queryArtist.split(/\s*(?:&|x|and|with|,)\s*/i).map(s => s.trim()).filter(Boolean);
+  const resultMembers = resultArtist.split(/\s*(?:&|x|and|with|,)\s*/i).map(s => s.trim()).filter(Boolean);
+  const originalMembers = originalArtist ? originalArtist.split(/\s*(?:&|x|and|with|,)\s*/i).map(s => s.trim()).filter(Boolean) : [];
 
-  const qNoSpace = qClean.replace(/\s+/g, '');
-  const rNoSpace = rClean.replace(/\s+/g, '');
-  const origNoSpace = origClean.replace(/\s+/g, '');
+  return queryMembers.some(qMem =>
+    resultMembers.some(rMem => isSingleArtistMatch(qMem, rMem))
+  ) || (originalMembers.length > 0 && originalMembers.some(oMem =>
+    resultMembers.some(rMem => isSingleArtistMatch(oMem, rMem))
+  ));
+}
 
-  // 1. 공백 제거 후 완전 일치 또는 포함 관계
-  if (qNoSpace === rNoSpace || (origNoSpace && origNoSpace.includes(rNoSpace)) || rNoSpace.includes(qNoSpace)) {
-    return true;
-  }
+// 곡 제목 정규화 및 한영 치환
+function normalizeTitle(title: string): string {
+  let cleaned = normalizeForComparison(title);
+  // 한영 숫자 및 고주파 단어 변환
+  cleaned = cleaned.replace(/트랙\s*(\d+)/g, 'track $1');
+  cleaned = cleaned.replace(/(\d+)시/g, '$1');
+  return cleaned;
+}
 
-  // 2. Jaccard 유사도 확인
-  const similarityWithQuery = calculateSimilarity(queryArtist, resultArtist);
-  const similarityWithOrig = originalArtist ? calculateSimilarity(originalArtist, resultArtist) : 0;
-  if (similarityWithQuery >= 0.4 || similarityWithOrig >= 0.4) {
-    return true;
-  }
+// 단일 곡명 매칭 판정
+function isSingleTitleMatch(query: string, result: string, original: string = ''): boolean {
+  const qAlternatives = extractAlternativeNames(query);
+  const rAlternatives = extractAlternativeNames(result);
+  const oAlternatives = original ? extractAlternativeNames(original) : [];
 
-  // 3. 번역 맵 매칭 확인 (예: 검정치마 <-> The Black Skirts)
-  const keys = Object.keys(ARTIST_TRANSLATION_MAP);
-  for (const key of keys) {
-    const keyClean = normalizeForComparison(key).replace(/\s+/g, '');
-    const values = ARTIST_TRANSLATION_MAP[key].map(v => normalizeForComparison(v).replace(/\s+/g, ''));
+  for (const qAlt of qAlternatives) {
+    for (const rAlt of rAlternatives) {
+      const qClean = normalizeTitle(qAlt);
+      const rClean = normalizeTitle(rAlt);
+      const qNoSpace = qClean.replace(/\s+/g, '');
+      const rNoSpace = rClean.replace(/\s+/g, '');
 
-    // 검색어나 원본에 한글명이 있고 결과가 영문명에 매핑되는 경우
-    const inputMatchesKey = qNoSpace.includes(keyClean) || (origNoSpace && origNoSpace.includes(keyClean));
-    const resultMatchesValue = values.some(val => rNoSpace.includes(val) || val.includes(rNoSpace));
+      // 1. 공백 제거 후 완전 일치
+      if (qNoSpace === rNoSpace && qNoSpace.length > 0) return true;
 
-    if (inputMatchesKey && resultMatchesValue) {
-      return true;
+      // 2. 로마자 발음 대조
+      if (isRomanizedMatch(qAlt, rAlt)) return true;
+
+      // 3. Jaccard 유사도 확인
+      if (calculateSimilarity(qAlt, rAlt) >= 0.35) return true;
+
+      // 4. 부분 문자열 포함 관계
+      if (qClean.length >= 2 && rClean.length >= 2) {
+        if (qClean.includes(rClean) || rClean.includes(qClean)) return true;
+      }
     }
-
-    // 그 반대인 경우 (검색어에 영문명이 있고 결과가 한글명에 매핑되는 경우)
-    const inputMatchesValue = values.some(val => qNoSpace.includes(val) || (origNoSpace && origNoSpace.includes(val)));
-    const resultMatchesKey = rNoSpace.includes(keyClean) || keyClean.includes(rNoSpace);
-
-    if (inputMatchesValue && resultMatchesKey) {
-      return true;
-    }
   }
 
-  // 4. 부분 문자열 포함 관계 (최소 2글자 이상 일치 필요, '오' 같은 1글자 매칭 방지)
-  if (qClean.length >= 2 && rClean.length >= 2) {
-    if (qClean.includes(rClean) || rClean.includes(qClean)) {
-      return true;
-    }
-  }
-  if (origClean.length >= 2 && rClean.length >= 2) {
-    if (origClean.includes(rClean) || rClean.includes(origClean)) {
-      return true;
+  for (const oAlt of oAlternatives) {
+    for (const rAlt of rAlternatives) {
+      const oClean = normalizeTitle(oAlt);
+      const rClean = normalizeTitle(rAlt);
+      const oNoSpace = oClean.replace(/\s+/g, '');
+      const rNoSpace = rClean.replace(/\s+/g, '');
+
+      if (oNoSpace === rNoSpace && oNoSpace.length > 0) return true;
+      if (isRomanizedMatch(oAlt, rAlt)) return true;
+      if (calculateSimilarity(oAlt, rAlt) >= 0.35) return true;
+      if (oClean.length >= 2 && rClean.length >= 2) {
+        if (oClean.includes(rClean) || rClean.includes(oClean)) return true;
+      }
     }
   }
 
@@ -158,39 +335,7 @@ function checkArtistMatch(queryArtist: string, resultArtist: string, originalArt
  * WHY: 아티스트는 일치하더라도 아예 다른 트랙의 가사를 긁어오는 문제를 방지합니다.
  */
 function checkTitleMatch(queryTitle: string, resultTitle: string, originalTitle: string = ''): boolean {
-  const qClean = normalizeForComparison(queryTitle);
-  const rClean = normalizeForComparison(resultTitle);
-  const origClean = originalTitle ? normalizeForComparison(originalTitle) : '';
-
-  const qNoSpace = qClean.replace(/\s+/g, '');
-  const rNoSpace = rClean.replace(/\s+/g, '');
-  const origNoSpace = origClean.replace(/\s+/g, '');
-
-  // 1. 공백 제거 후 완전 일치
-  if (qNoSpace === rNoSpace || (origNoSpace && origNoSpace.includes(rNoSpace)) || rNoSpace.includes(qNoSpace)) {
-    return true;
-  }
-
-  // 2. Jaccard 유사도 확인 (곡명은 0.35 이상)
-  const similarityWithQuery = calculateSimilarity(queryTitle, resultTitle);
-  const similarityWithOrig = originalTitle ? calculateSimilarity(originalTitle, resultTitle) : 0;
-  if (similarityWithQuery >= 0.35 || similarityWithOrig >= 0.35) {
-    return true;
-  }
-
-  // 3. 부분 문자열 포함 관계 (최소 2글자 이상 일치)
-  if (qClean.length >= 2 && rClean.length >= 2) {
-    if (qClean.includes(rClean) || rClean.includes(qClean)) {
-      return true;
-    }
-  }
-  if (origClean.length >= 2 && rClean.length >= 2) {
-    if (origClean.includes(rClean) || rClean.includes(origClean)) {
-      return true;
-    }
-  }
-
-  return false;
+  return isSingleTitleMatch(queryTitle, resultTitle, originalTitle);
 }
 
 // 요청 간 딜레이 함수
