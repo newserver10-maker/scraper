@@ -372,7 +372,7 @@ export async function searchSongClient(
     throw new Error('Genius API 토큰이 설정되지 않았습니다. 설정 패널에서 토큰을 입력해 주세요.');
   }
 
-  const query = `${artist} ${title}`;
+  const query = artist ? `${artist} ${title}` : title;
   const targetUrl = `${GENIUS_API_BASE}/search?q=${encodeURIComponent(query)}&access_token=${token}`;
   const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(targetUrl)}`;
   
@@ -522,26 +522,100 @@ export async function scrapeSongLyricsClient(
   const cleanArtist = artist.replace(/\s*\(.*?\)\s*/g, '').trim();
   const cleanTitle = title.replace(/\s*\(.*?\)\s*/g, '').trim();
 
+  // 1. 번역 맵에서 매핑된 영어 아티스트 조합 생성 헬퍼
+  const getMappedEnglishArtists = (artStr: string): string[] => {
+    const members = artStr.split(/\s*(?:&|x|and|with|,)\s*/i).map(s => s.trim()).filter(Boolean);
+    const resolvedMembersList: string[][] = [];
+
+    for (const mem of members) {
+      const memClean = normalizeForComparison(mem).replace(/\s+/g, '');
+      let mapped = [mem];
+      
+      for (const [ko, engList] of Object.entries(ARTIST_TRANSLATION_MAP)) {
+        if (normalizeForComparison(ko).replace(/\s+/g, '') === memClean) {
+          mapped = [...mapped, ...engList];
+          break;
+        }
+      }
+      resolvedMembersList.push(mapped);
+    }
+
+    let results: string[] = [];
+    const generateCombinations = (index: number, current: string[]) => {
+      if (index === resolvedMembersList.length) {
+        results.push(current.join(' & '));
+        return;
+      }
+      for (const val of resolvedMembersList[index]) {
+        generateCombinations(index + 1, [...current, val]);
+      }
+    };
+    if (resolvedMembersList.length > 0) {
+      generateCombinations(0, []);
+    }
+    return results.filter(r => r !== artStr);
+  };
+
+  // 2. 동적 로마자 변환 아티스트 조합 생성 헬퍼
+  const getRomanizedArtist = (artStr: string): string => {
+    const members = artStr.split(/\s*(?:&|x|and|with|,)\s*/i).map(s => s.trim()).filter(Boolean);
+    const romMembers = members.map(m => {
+      const pure = m.replace(/\s*\(.*?\)\s*/g, '').trim();
+      return romanizeHangul(pure);
+    });
+    return romMembers.join(' & ');
+  };
+
   let searchResult = null;
+  const queryCandidates: Array<{ queryArtist: string; queryTitle: string }> = [];
 
-  // 1차: 괄호 안 영문명이 있으면 그걸로 검색 시도 (원본 artist, title을 대조용 인자로 전달)
+  // A. [1단계] 괄호 내 영문 정보 우선 사용
   if (englishNameMatch) {
-    const engArtist = englishNameMatch[1];
-    const engTitle = englishTitle ? englishTitle[1] : cleanTitle;
-    searchResult = await searchSongClient(engArtist, engTitle, token, artist, title);
-    await delay(1000);
+    const engArtist = englishNameMatch[1].trim();
+    const engTitle = englishTitle ? englishTitle[1].trim() : cleanTitle;
+    queryCandidates.push({ queryArtist: engArtist, queryTitle: engTitle });
   }
 
-  // 2차: 괄호를 제거한 순수 아티스트명 + 순수 곡명으로 검색
-  if (!searchResult && cleanArtist) {
-    searchResult = await searchSongClient(cleanArtist, cleanTitle, token, artist, title);
-    await delay(1000);
+  // B. [2단계] 번역 사전 매핑 영어 조합 사용
+  const mappedEngArtists = getMappedEnglishArtists(cleanArtist);
+  for (const engArt of mappedEngArtists) {
+    queryCandidates.push({ queryArtist: engArt, queryTitle: cleanTitle });
   }
 
-  // 3차: 원본 문자열 전체를 그대로 검색 (괄호 포함)
-  if (!searchResult) {
-    searchResult = await searchSongClient(artist, title, token, artist, title);
-    await delay(1000);
+  // C. [3단계] 동적 로마자 변환 결과 사용
+  const romanizedArt = getRomanizedArtist(cleanArtist);
+  if (romanizedArt && simplifyRoman(romanizedArt) !== simplifyRoman(cleanArtist)) {
+    queryCandidates.push({ queryArtist: romanizedArt, queryTitle: cleanTitle });
+  }
+
+  // D. [4단계] 순수 한글 쿼리 (기존 2차 및 3차 폴백)
+  queryCandidates.push({ queryArtist: cleanArtist, queryTitle: cleanTitle });
+  queryCandidates.push({ queryArtist: artist, queryTitle: title });
+
+  // E. [5단계] 최후의 보루: 아티스트명을 비우고 '곡 제목 단독 검색'
+  // WHY: 아티스트명이 전혀 엉뚱하게 등록된 경우 제목으로 먼저 Genius에서 조회 후
+  //      검색 결과들의 아티스트 명칭과 기획안의 아티스트명을 역매칭합니다.
+  queryCandidates.push({ queryArtist: '', queryTitle: cleanTitle });
+  queryCandidates.push({ queryArtist: '', queryTitle: title });
+
+  // 중복 쿼리 제거
+  const uniqueQueries: Array<{ queryArtist: string; queryTitle: string }> = [];
+  const seen = new Set<string>();
+  for (const q of queryCandidates) {
+    const key = `${q.queryArtist.toLowerCase()}|||${q.queryTitle.toLowerCase()}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      uniqueQueries.push(q);
+    }
+  }
+
+  // 다단계로 검색 시도
+  for (const q of uniqueQueries) {
+    searchResult = await searchSongClient(q.queryArtist, q.queryTitle, token, artist, title);
+    if (searchResult) {
+      break;
+    }
+    await delay(300); // API 과부하 및 속도 제한 방지 딜레이
   }
 
   if (!searchResult) {
