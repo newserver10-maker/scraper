@@ -107,40 +107,50 @@ function isValidReference(artist: string, title: string): boolean {
 export function parsePlaylistText(text: string): Track[] {
   const tracks: Track[] = [];
   
-  // 'Track XX:' 패턴을 기준으로 전체 텍스트를 트랙 블록별로 분할합니다.
-  const trackBlocks = text.split(/(?=Track \d+:)/g);
+  // 'Track XX' 패턴 뒤에 공백, 마침표, 콜론 등이 오는 패턴을 기준으로 전체 텍스트를 트랙 블록별로 분할합니다.
+  const trackBlocks = text.split(/(?=Track \d+[\s\.\:]+)/g);
   
   for (const block of trackBlocks) {
     if (!block.trim().startsWith('Track')) continue;
     
-    // 1. 트랙 번호 및 한글/영문 제목 추출
-    const headerMatch = block.match(/Track (\d+):\s*([^\(\n\r]+)(?:\(([^\)\n\r]+)\))?/);
+    // 1. 트랙 번호 및 한글/영문 제목 추출 (콜론, 마침표, 공백 구분자 지원)
+    const headerMatch = block.match(/Track (\d+)[\s\.\:]+\s*([^\(\n\r]+)(?:\(([^\)\n\r]+)\))?/);
     if (!headerMatch) continue;
     
     const trackNum = parseInt(headerMatch[1], 10);
     const titleKo = headerMatch[2].trim();
     const titleEn = headerMatch[3] ? headerMatch[3].trim() : titleKo;
     
-    // 2. 장르 추출
-    const genreMatch = block.match(/(?:장르|음악 장르):\s*([^\n\r]+)/);
-    const genre = genreMatch ? genreMatch[1].trim() : '알 수 없음';
+    // 2. 장르 추출 (슬래시 구분자가 있는 경우 첫 번째 값만 장르명으로 사용)
+    let genre = '알 수 없음';
+    const genreMatch = block.match(/(?:장르|음악 장르)[^\n\r:]*:\s*([^\n\r]+)/);
+    if (genreMatch) {
+      genre = genreMatch[1].trim();
+      if (genre.includes('/')) {
+        genre = genre.split('/')[0].trim();
+      }
+    }
     
-    // 3. BPM 추출
-    const bpmMatch = block.match(/(?:템포|BPM):\s*(\d+)/);
-    const bpm = bpmMatch ? parseInt(bpmMatch[1], 10) : 80;
+    // 3. BPM 추출 (템포/BPM 라인에서 숫자를 파싱하거나, 전체 블록 내 폴백 검색)
+    let bpm = 80;
+    const bpmMatch = block.match(/(?:템포|BPM)[^\n\r:]*:\s*([^\n\r]+)/i);
+    if (bpmMatch) {
+      const bpmLine = bpmMatch[1].trim();
+      const numMatch = bpmLine.match(/\d+/);
+      if (numMatch) {
+        bpm = parseInt(numMatch[0], 10);
+      }
+    } else {
+      const fallbackBpm = block.match(/(?:템포|BPM)[^\n\r]*?(\d+)/i);
+      if (fallbackBpm) {
+        bpm = parseInt(fallbackBpm[1], 10);
+      }
+    }
     
     // 4. 가사 레퍼런스 추출
-    // WHY: "가사 레퍼런스"로만 한정하여 매칭합니다.
-    //      단순 "레퍼런스"는 기획안 내 다른 맥락(영상 레퍼런스, 비주얼 레퍼런스 등)에서도
-    //      등장할 수 있어 오인 위험이 높습니다.
-    //
-    // 섹션 종료 감지를 유연하게 구성:
-    //   - 다양한 불릿 기호 (●, •, ◆, ▶, ○, ■, ◇, ▷, ★, ☆ 등)
-    //   - "BLOCK" 또는 "Track" 시작 패턴
-    //   - 줄바꿈 후 빈 줄 2개 이상 (섹션 간 구분)
-    //   - ---PAGE BREAK--- 같은 구분선
+    // 불릿 기호 리스트에 별표(*)를 추가하여 섹션 종료를 정상 감지합니다.
     const refMatch = block.match(
-      /가사 레퍼런스:\s*([\s\S]*?)(?=\n\s*[●•◆▶○■◇▷★☆]\s|\n\s*Track\s|\n\s*BLOCK\s|\n\s*---|\n\s*\n\s*\n|$)/
+      /가사 레퍼런스:\s*([\s\S]*?)(?=\n\s*[\*●•◆▶○■◇▷★☆]\s|\n\s*Track\s|\n\s*BLOCK\s|\n\s*---\s*|\n\s*\n\s*\n|$)/
     );
     const references: Song[] = [];
     
@@ -148,25 +158,12 @@ export function parsePlaylistText(text: string): Track[] {
       let refText = refMatch[1].trim();
       
       // 전체 레퍼런스 텍스트의 줄바꿈을 공백으로 합침
-      // WHY: 기획안의 레퍼런스 섹션은 논리적으로 항상 한 줄이며, 줄바꿈은 단지
-      //       에디터/PDF의 물리적 줄넘김입니다. "James\nBlake - Lindisfarne"가
-      //       "James Blake - Lindisfarne"으로 올바르게 복원됩니다.
       refText = refText.replace(/\r?\n/g, ' ').replace(/\s+/g, ' ').trim();
       
       // 맨 끝의 trailing 마침표 제거
       refText = refText.replace(/\.\s*$/, '');
       
       // 콤마 기반 분할 + 아티스트-곡명 패턴 인식
-      // WHY: 단순 콤마 분할은 "Cocteau Twins - Sea, Swallow Me" 같은 곡명을
-      //       쪼개버리므로, "콤마 뒤에 [아티스트] - [곡명] 패턴이 있는 콤마"만
-      //       진짜 구분자로 인식합니다.
-      //
-      // 전략: 정규식으로 "아티스트 - 곡명" 단위를 직접 매칭합니다.
-      //   아티스트: 대시 앞의 텍스트 (다음 아티스트-곡명 쌍이 올 때까지)
-      //   곡명: 대시 뒤부터 다음 콤마+아티스트 패턴 직전까지
-      //
-      // 패턴: [아티스트] - [곡명] (, [아티스트] - [곡명])*
-      //        곡명에는 콤마가 포함될 수 있음 (ex: "Sea, Swallow Me")
       const songPattern = /([^,]+?)\s+[-–—~]\s+(.+?)(?=,\s*[^,]+?\s+[-–—~]\s|$)/g;
       const songsRaw: string[] = [];
       
@@ -174,7 +171,6 @@ export function parsePlaylistText(text: string): Track[] {
       while ((match = songPattern.exec(refText)) !== null) {
         const rawArtist = match[1].trim();
         const rawTitle = match[2].trim();
-        // 조합하여 원본 형태로 보존
         songsRaw.push(`${rawArtist} - ${rawTitle}`);
       }
       
@@ -189,14 +185,9 @@ export function parsePlaylistText(text: string): Track[] {
         const cleaned = songRaw.trim().replace(/^[-•*#▪▸▹◦\d+).\s]+/, '');
         if (!cleaned || cleaned.length < 3) continue;
         
-        // 아티스트와 제목을 가르는 구분자: 하이픈(-), 대시(–, —), 틸드(~) 허용
-        // WHY: 콜론(:)은 기획안 속성명 구분자로도 쓰이므로 여기서는 제외
-        //      (이전에 콜론을 포함하면 "음악 장르: Ambient Pop" 같은 것이 매칭됨)
         const parts = cleaned.split(/\s*[-–—~]\s*/);
         if (parts.length >= 2) {
           const artist = parts[0].trim();
-          
-          // 제목 안에 하이픈이 다시 들어갈 수 있으므로 join으로 원복
           const songTitle = parts.slice(1).join('-').trim();
           
           // 다단계 유효성 검증
