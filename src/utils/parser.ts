@@ -107,11 +107,14 @@ function isValidReference(artist: string, title: string): boolean {
 export function parsePlaylistText(text: string): Track[] {
   const tracks: Track[] = [];
   
+  // 0. UTF-8 BOM 및 윈도우 복사 시 유입될 수 있는 보이지 않는 유니코드 제어 문자 제거
+  text = text.replace(/^\uFEFF/, '').replace(/[\u200B-\u200D\uFEFF]/g, '');
+  
   // 'Track XX' 패턴 뒤에 공백, 마침표, 콜론 등이 오는 패턴을 기준으로 전체 텍스트를 트랙 블록별로 분할합니다.
   const trackBlocks = text.split(/(?=Track \d+[\s\.\:]+)/g);
   
   for (const block of trackBlocks) {
-    if (!block.trim().startsWith('Track')) continue;
+    if (!/^\s*Track/i.test(block)) continue;
     
     // 1. 트랙 번호 및 한글/영문 제목 추출 (콜론, 마침표, 공백 구분자 지원)
     const headerMatch = block.match(/Track (\d+)[\s\.\:]+\s*([^\(\n\r]+)(?:\(([^\)\n\r]+)\))?/);
