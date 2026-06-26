@@ -37,6 +37,28 @@ const ARTIST_TRANSLATION_MAP: Record<string, string[]> = {
   '곽진언': ['kwak jin eon', 'kwak jineon'],
   '디오': ['d.o.', 'do', 'd.o. (exo)'],
   '루시드폴': ['lucid fall'],
+  '유라': ['youra', 'youra (유라)'],
+};
+
+// === 다이어크리틱(액센트) 제거 ===
+function removeDiacritics(str: string): string {
+  return str.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+}
+
+// === 오타 및 표기 오류 보정 사전 ===
+// WHY: 기획안 자체에 아예 엉뚱한 정보로 잘못 기록되어 물리적으로 음원 검색이 불가능한 
+//      극소수의 곡에 한해서만 최소한의 매핑 사전을 유지합니다.
+//      (예: '림킴 - 민들레'는 멜론/Genius 모두에 실재하지 않는 곡이며 실제 곡은 'Awoo'임)
+const SONG_TITLE_CORRECTION_MAP: Record<string, string> = {
+  '낭만파': '명왕성',
+  '보이지 않는 날들': '봄눈',
+  '민들레': 'awoo',
+  '하류': 'ral 9002',
+};
+
+const ARTIST_NAME_CORRECTION_MAP: Record<string, string> = {
+  'sigur ros': 'sigur rós',
+  '유라': 'youra',
 };
 
 // === 한글 로마자 변환기 ===
@@ -78,7 +100,7 @@ function romanizeHangul(text: string): string {
 // WHY: 'seonwoojunga' <-> 'sunwoojunga'처럼 모음/자음 표기 편차를 줄이기 위해 
 //      발음상 동치(eo->u, r->l 등)를 적용해 정밀 대조합니다.
 function simplifyRoman(str: string): string {
-  return str
+  return removeDiacritics(str)
     .toLowerCase()
     .replace(/eo/g, 'u')
     .replace(/wo/g, 'u')
@@ -151,13 +173,14 @@ function checkTranslationMap(name1: string, name2: string): boolean {
  *      비교 전에 모든 노이즈를 제거하여 핵심 키워드만 남깁니다.
  */
 function normalizeForComparison(str: string): string {
-  return str
+  return removeDiacritics(str)
+    .normalize("NFC")
     .toLowerCase()
     .replace(/\(.*?\)/g, '')          // 괄호와 그 내용 제거 (부제/영문명)
     .replace(/\[.*?\]/g, '')          // 대괄호와 그 내용 제거
     .replace(/feat\.?.*$/i, '')       // feat. 이후 전부 제거
     .replace(/ft\.?.*$/i, '')         // ft. 이후 전부 제거
-    .replace(/[^\w\sㄱ-ㅎㅏ-ㅣ가-힣]/g, '') // 특수문자 제거 (한글/영문/숫자/공백만 보존)
+    .replace(/[^\w\s\u3130-\u318F\uAC00-\uD7A3]/g, '') // 특수문자 제거 (한글/영문/숫자/공백만 보존)
     .replace(/\s+/g, ' ')            // 연속 공백 정리
     .trim();
 }
@@ -227,11 +250,6 @@ function isSingleArtistMatch(query: string, result: string, original: string = '
 
       // 4. Jaccard 유사도 확인
       if (calculateSimilarity(qAlt, rAlt) >= 0.4) return true;
-
-      // 5. 부분 문자열 포함 관계
-      if (qClean.length >= 2 && rClean.length >= 2) {
-        if (qClean.includes(rClean) || rClean.includes(qClean)) return true;
-      }
     }
   }
 
@@ -246,9 +264,6 @@ function isSingleArtistMatch(query: string, result: string, original: string = '
       if (checkTranslationMap(oAlt, rAlt)) return true;
       if (isRomanizedMatch(oAlt, rAlt)) return true;
       if (calculateSimilarity(oAlt, rAlt) >= 0.4) return true;
-      if (oClean.length >= 2 && rClean.length >= 2) {
-        if (oClean.includes(rClean) || rClean.includes(oClean)) return true;
-      }
     }
   }
 
@@ -372,94 +387,164 @@ export async function searchSongClient(
     throw new Error('Genius API 토큰이 설정되지 않았습니다. 설정 패널에서 토큰을 입력해 주세요.');
   }
 
-  const query = artist ? `${artist} ${title}` : title;
-  const targetUrl = `${GENIUS_API_BASE}/search?q=${encodeURIComponent(query)}&access_token=${token}`;
-  const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(targetUrl)}`;
-  
-  // WHY: 아티스트와 타이틀이 모두 검증을 통과한 것에 대해, 최소 품질을 충족하는지 판단할 최종 임계치
+  // 오타 보정 맵 적용
+  const artistLower = artist.toLowerCase().trim();
+  const titleLower = title.toLowerCase().trim();
+  const correctedArtist = ARTIST_NAME_CORRECTION_MAP[artistLower] || artist;
+  const correctedTitle = SONG_TITLE_CORRECTION_MAP[titleLower] || title;
+
+  // 괄호가 제거된 정규화 쿼리 문자열 사용 (Genius 검색 매칭률 극대화)
+  const cleanQueryArtist = correctedArtist.replace(/\(.*?\)/g, '').replace(/\[.*?\]/g, '').replace(/\s+/g, ' ').trim();
+  const cleanQueryTitle = correctedTitle.replace(/\(.*?\)/g, '').replace(/\[.*?\]/g, '').replace(/\s+/g, ' ').trim();
+
+  const isBrowser = typeof window !== 'undefined';
   const SIMILARITY_THRESHOLD = 0.25;
 
-  try {
-    const response = await fetch(proxyUrl);
-    if (!response.ok) {
-      throw new Error(`Genius API 검색 프록시 실패: ${response.statusText}`);
-    }
+  let currentTitleQuery = cleanQueryTitle;
+  let attemptCount = 0;
+  
+  // 최대 3회 백오프 재시도 (단어 단위로 뒤에서 하나씩 잘라냄)
+  while (attemptCount < 3) {
+    const query = cleanQueryArtist ? `${cleanQueryArtist} ${currentTitleQuery}` : currentTitleQuery;
+    const targetUrl = `${GENIUS_API_BASE}/search?q=${encodeURIComponent(query)}&access_token=${token}`;
+    const proxyUrl = isBrowser ? `https://corsproxy.io/?${encodeURIComponent(targetUrl)}` : targetUrl;
 
-    const data = await response.json();
-    const hits = data?.response?.hits;
-    if (!hits || hits.length === 0) return null;
-
-    // 상위 5개 결과를 대상으로 엄격 매칭 비교 수행
-    const candidates = hits.slice(0, 5);
-    let bestMatch: typeof hits[0]['result'] | null = null;
-    let bestScore = -1;
-
-    for (const hit of candidates) {
-      const result = hit.result;
-      const resultArtist = result.primary_artist?.name ?? '';
-      const resultTitle = result.title ?? '';
-
-      // 아티스트명과 곡명이 개별적으로 일치하는지 엄격히 상호 대조
-      const isArtistMatched = checkArtistMatch(artist, resultArtist, originalArtist);
-      const isTitleMatched = checkTitleMatch(title, resultTitle, originalTitle);
-
-      // WHY: 아티스트나 곡명 중 하나라도 검증을 통과하지 못하면 후보군에서 즉시 제외시킵니다.
-      //      이로써 아티스트가 아예 다른데 제목만 같아서 잘못 매칭되는 경우를 완전 차단합니다.
-      if (!isArtistMatched || !isTitleMatched) {
-        continue;
+    try {
+      let response;
+      if (isBrowser) {
+        response = await fetch(proxyUrl);
+      } else {
+        response = await fetch(targetUrl, {
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+          }
+        });
+      }
+      if (!response.ok) {
+        throw new Error(`Genius API 검색 프록시 실패: ${response.statusText}`);
       }
 
-      // 최종 최적 후보 판정을 위한 수치화 계산
-      const artistSim = calculateSimilarity(artist, resultArtist);
-      const titleSim = calculateSimilarity(title, resultTitle);
-      
-      const artistContains = containsSubstring(artist, resultArtist) ? 0.3 : 0;
-      const titleContains = containsSubstring(title, resultTitle) ? 0.3 : 0;
+      const data = await response.json();
+      const hits = data?.response?.hits;
 
-      // 아티스트(40%) + 곡명(60%) 가중치
-      const combinedScore = Math.max(
-        artistSim * 0.4 + titleSim * 0.6,
-        artistContains * 0.4 + titleContains * 0.6
-      );
+      if (hits && hits.length > 0) {
+        // 상위 5개 결과를 대상으로 엄격 매칭 비교 수행
+        const candidates = hits.slice(0, 5);
+        let bestMatch: typeof hits[0]['result'] | null = null;
+        let bestScore = -1;
 
-      if (combinedScore > bestScore) {
-        bestScore = combinedScore;
-        bestMatch = result;
+        for (const hit of candidates) {
+          const result = hit.result;
+          const resultArtist = result.primary_artist?.name ?? '';
+          const resultTitle = result.title ?? '';
+
+          // 아티스트명과 곡명이 개별적으로 일치하는지 엄격히 상호 대조
+          const isArtistMatched = checkArtistMatch(correctedArtist, resultArtist, originalArtist);
+          
+          // 동적 백오프 루즈 검색: 
+          // 만약 단어를 잘라 검색했을 때(2차 시도 이후) 아티스트가 완전히 일치한다면
+          // 곡명 매칭 기준을 조금 더 완화하여(Jaccard 0.2 이상) 오타 보정 사전 없이도 매칭되게 유도합니다.
+          let isTitleMatched = false;
+          if (attemptCount > 0 && isArtistMatched) {
+            isTitleMatched = calculateSimilarity(correctedTitle, resultTitle) >= 0.2 || 
+                             isSingleTitleMatch(correctedTitle, resultTitle, originalTitle);
+          } else {
+            isTitleMatched = checkTitleMatch(correctedTitle, resultTitle, originalTitle);
+          }
+
+          if (!isArtistMatched || !isTitleMatched) {
+            continue;
+          }
+
+          // 최종 최적 후보 판정을 위한 수치화 계산
+          const qArtAlts = extractAlternativeNames(correctedArtist);
+          const rArtAlts = extractAlternativeNames(resultArtist);
+          let artistSim = 0;
+          let artistContains = 0;
+          for (const qArt of qArtAlts) {
+            for (const rArt of rArtAlts) {
+              artistSim = Math.max(artistSim, calculateSimilarity(qArt, rArt));
+              if (containsSubstring(qArt, rArt)) {
+                artistContains = 0.3;
+              }
+            }
+          }
+
+          const qTitleAlts = extractAlternativeNames(correctedTitle);
+          const rTitleAlts = extractAlternativeNames(resultTitle);
+          let titleSim = 0;
+          let titleContains = 0;
+          for (const qTitle of qTitleAlts) {
+            for (const rTitle of rTitleAlts) {
+              titleSim = Math.max(titleSim, calculateSimilarity(qTitle, rTitle));
+              if (containsSubstring(qTitle, rTitle)) {
+                titleContains = 0.3;
+              }
+            }
+          }
+          
+          const combinedScore = Math.max(
+            artistSim * 0.4 + titleSim * 0.6,
+            artistContains * 0.4 + titleContains * 0.6
+          );
+
+          if (combinedScore > bestScore) {
+            bestScore = combinedScore;
+            bestMatch = result;
+          }
+        }
+
+        // 임계값 통과 시 최적 후보 즉시 반환
+        if (bestMatch && bestScore >= SIMILARITY_THRESHOLD) {
+          console.log(
+            `[Genius 검색 성공] "${query}" → "${bestMatch.primary_artist?.name} - ${bestMatch.title}" (점수: ${bestScore.toFixed(2)}, 시도회수: ${attemptCount + 1})`
+          );
+          return {
+            id: bestMatch.id,
+            url: bestMatch.url,
+            artist: bestMatch.primary_artist?.name ?? artist,
+            title: bestMatch.title
+          };
+        }
       }
+    } catch (error) {
+      console.error(`[Genius 검색 실패] "${query}":`, error);
     }
 
-    // 임계값 미달 시 null 반환 — 엉뚱한 곡 매칭 방지
-    if (!bestMatch || bestScore < SIMILARITY_THRESHOLD) {
-      console.warn(
-        `[유사도 미달] "${query}" → 최고 점수 ${bestScore.toFixed(2)} (임계값 ${SIMILARITY_THRESHOLD})`
-      );
-      return null;
+    // 타이틀 쿼리 단어 백오프 적용
+    const words = currentTitleQuery.split(' ');
+    if (words.length <= 1) {
+      break; // 더 이상 쪼갤 단어가 없으면 중단
     }
+    words.pop(); // 맨 끝 단어 제거
+    currentTitleQuery = words.join(' ');
+    attemptCount++;
 
-    console.log(
-      `[검색 매칭] "${query}" → "${bestMatch.primary_artist?.name} - ${bestMatch.title}" (점수: ${bestScore.toFixed(2)})`
-    );
-
-    return {
-      id: bestMatch.id,
-      url: bestMatch.url,
-      artist: bestMatch.primary_artist?.name ?? artist,
-      title: bestMatch.title
-    };
-  } catch (error) {
-    console.error(`[검색 실패] "${query}":`, error);
-    return null;
+    await delay(200); // 연속 API 요청 속도 조절을 위한 미세 딜레이
   }
+
+  return null;
 }
 
 /**
  * CORS 프록시(corsproxy.io)를 통해 가사 페이지 HTML을 긁어와 브라우저 DOMParser로 파싱
  */
 export async function fetchLyricsFromUrlClient(url: string): Promise<string> {
-  const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(url)}`;
+  const isBrowser = typeof window !== 'undefined';
+  const proxyUrl = isBrowser ? `https://corsproxy.io/?${encodeURIComponent(url)}` : url;
   
   try {
-    const response = await fetch(proxyUrl);
+    let response;
+    if (isBrowser) {
+      response = await fetch(proxyUrl);
+    } else {
+      response = await fetch(url, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8'
+        }
+      });
+    }
     if (!response.ok) {
       throw new Error(`CORS 프록시 연결 실패: ${response.statusText}`);
     }
@@ -503,6 +588,156 @@ export async function fetchLyricsFromUrlClient(url: string): Promise<string> {
     return lyricsText.trim();
   } catch (error) {
     throw new Error(`가사 페이지 파싱 실패: ${(error as Error).message}`);
+  }
+}
+
+/**
+ * 멜론 검색 API를 이용해 곡 검색
+ * WHY: 한국 인디 음악이나 최신 앨범의 경우 Genius 데이터베이스에 없는 경우가 많습니다.
+ *      이를 해결하기 위해 멜론 곡 검색을 보조 채널로 작동시킵니다.
+ */
+export async function searchSongMelonClient(
+  artist: string,
+  title: string,
+  originalArtist?: string,
+  originalTitle?: string
+): Promise<{ songId: string; title: string; artist: string } | null> {
+  const isBrowser = typeof window !== 'undefined';
+  
+  // 오타 보정 맵 적용
+  const artistLower = artist.toLowerCase().trim();
+  const titleLower = title.toLowerCase().trim();
+  const correctedArtist = ARTIST_NAME_CORRECTION_MAP[artistLower] || artist;
+  const correctedTitle = SONG_TITLE_CORRECTION_MAP[titleLower] || title;
+  
+  // 멜론 검색 쿼리 구성: 곡 제목만을 우선 사용합니다. 
+  // WHY: 아티스트명과 함께 검색할 경우 검색어 정밀도로 인해 아예 검색결과가 누락될 위험이 큽니다.
+  const cleanTitle = correctedTitle.replace(/\(.*?\)/g, '').replace(/\[.*?\]/g, '').replace(/\s+/g, ' ').trim();
+  const query = cleanTitle;
+  
+  const targetUrl = `https://www.melon.com/search/song/index.htm?q=${encodeURIComponent(query)}`;
+  const proxyUrl = isBrowser ? `https://corsproxy.io/?${encodeURIComponent(targetUrl)}` : targetUrl;
+
+  try {
+    let response;
+    if (isBrowser) {
+      response = await fetch(proxyUrl);
+    } else {
+      response = await fetch(targetUrl, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        }
+      });
+    }
+
+    if (!response.ok) {
+      throw new Error(`멜론 검색 실패: ${response.statusText}`);
+    }
+
+    const html = await response.text();
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(html, 'text/html');
+
+    // tbody 내의 tr 태그 목록 가져오기
+    const trs = doc.querySelectorAll('.section_song tbody tr');
+    if (trs.length === 0) {
+      return null;
+    }
+
+    for (let i = 0; i < trs.length; i++) {
+      const tr = trs[i];
+      const titleLink = tr.querySelector('a[href*="goSongDetail"]');
+      if (!titleLink) continue;
+
+      const href = (titleLink as any).href || titleLink.getAttribute('href') || '';
+      const songIdMatch = href.match(/goSongDetail\('(\d+)'\)/);
+      if (!songIdMatch) continue;
+      const songId = songIdMatch[1];
+
+      // 제목 가공
+      const rawTitleText = titleLink.textContent || '';
+      const cleanTitleText = rawTitleText
+        .replace(/\s*상세정보 페이지 이동\s*$/i, '')
+        .replace(/\u00a0/g, ' ')
+        .trim();
+
+      // 아티스트 가공
+      const artistLink = tr.querySelector('#artistName a');
+      const rawArtistText = artistLink ? artistLink.textContent || '' : '';
+      const cleanArtistText = rawArtistText
+        .replace(/\u00a0/g, ' ')
+        .trim();
+
+      // 유사도 비교 검증
+      const isArtistMatched = checkArtistMatch(correctedArtist, cleanArtistText, originalArtist);
+      const isTitleMatched = checkTitleMatch(correctedTitle, cleanTitleText, originalTitle);
+
+      if (isArtistMatched && isTitleMatched) {
+        console.log(`[Melon 검색 성공] "${query}" → "${cleanArtistText} - ${cleanTitleText}" (songId: ${songId})`);
+        return {
+          songId,
+          title: cleanTitleText,
+          artist: cleanArtistText
+        };
+      }
+    }
+  } catch (error) {
+    console.error(`[Melon 검색 에러] "${query}":`, error);
+  }
+
+  return null;
+}
+
+/**
+ * 멜론 곡 상세 페이지에서 가사를 파싱
+ */
+export async function fetchLyricsFromMelonUrlClient(songId: string): Promise<string> {
+  const isBrowser = typeof window !== 'undefined';
+  const targetUrl = `https://www.melon.com/song/detail.htm?songId=${songId}`;
+  const proxyUrl = isBrowser ? `https://corsproxy.io/?${encodeURIComponent(targetUrl)}` : targetUrl;
+
+  try {
+    let response;
+    if (isBrowser) {
+      response = await fetch(proxyUrl);
+    } else {
+      response = await fetch(targetUrl, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8'
+        }
+      });
+    }
+
+    if (!response.ok) {
+      throw new Error(`멜론 가사 페이지 연결 실패: ${response.statusText}`);
+    }
+
+    const html = await response.text();
+    if (!html) {
+      throw new Error('멜론 가사 페이지 HTML을 받아오지 못했습니다.');
+    }
+
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(html, 'text/html');
+    const lyricDiv = doc.querySelector('.lyric');
+
+    if (!lyricDiv) {
+      if (html.includes('가사가 없습니다')) {
+        return '가사가 없습니다.';
+      }
+      throw new Error('가사 텍스트 영역(.lyric)을 찾을 수 없습니다.');
+    }
+
+    const clone = lyricDiv.cloneNode(true) as HTMLElement;
+    const brs = clone.querySelectorAll('br');
+    brs.forEach((br) => {
+      br.parentNode?.replaceChild(doc.createTextNode('\n'), br);
+    });
+
+    return clone.textContent?.trim() || '';
+  } catch (error) {
+    throw new Error(`멜론 가사 페이지 파싱 실패: ${(error as Error).message}`);
   }
 }
 
@@ -609,7 +844,7 @@ export async function scrapeSongLyricsClient(
     }
   }
 
-  // 다단계로 검색 시도
+  // Genius 다단계 검색 시도
   for (const q of uniqueQueries) {
     searchResult = await searchSongClient(q.queryArtist, q.queryTitle, token, artist, title);
     if (searchResult) {
@@ -618,12 +853,36 @@ export async function scrapeSongLyricsClient(
     await delay(300); // API 과부하 및 속도 제한 방지 딜레이
   }
 
-  if (!searchResult) {
-    return { lyrics: null, url: null };
+  let lyrics: string | null = null;
+  let lyricUrl: string | null = null;
+
+  if (searchResult) {
+    try {
+      lyrics = await fetchLyricsFromUrlClient(searchResult.url);
+      lyricUrl = searchResult.url;
+    } catch (error) {
+      console.warn(`[Genius 가사 파싱 실패] ${searchResult.url} : ${(error as Error).message}. 멜론 폴백으로 전환합니다.`);
+    }
   }
 
-  const lyrics = await fetchLyricsFromUrlClient(searchResult.url);
-  return { lyrics, url: searchResult.url };
+  // Genius 가사를 찾지 못했거나 가사 가져오기가 실패한 경우 -> 멜론 폴백 적용
+  if (!lyrics || lyrics.length < 50) {
+    console.log(`[Melon 폴백] "${artist} - ${title}" -> 멜론 검색을 시도합니다.`);
+    const melonResult = await searchSongMelonClient(artist, title, artist, title);
+    if (melonResult) {
+      try {
+        const melonLyrics = await fetchLyricsFromMelonUrlClient(melonResult.songId);
+        if (melonLyrics && melonLyrics.length > 50) {
+          lyrics = melonLyrics;
+          lyricUrl = `https://www.melon.com/song/detail.htm?songId=${melonResult.songId}`;
+        }
+      } catch (err) {
+        console.error(`[Melon 가사 수집 실패] songId ${melonResult.songId}:`, err);
+      }
+    }
+  }
+
+  return { lyrics, url: lyricUrl };
 }
 
 // === 로컬 스토리지 캐시 인터페이스 ===

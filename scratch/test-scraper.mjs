@@ -135,7 +135,7 @@ function normalizeForComparison(str) {
     .replace(/\[.*?\]/g, '')
     .replace(/feat\.?.*$/i, '')
     .replace(/ft\.?.*$/i, '')
-    .replace(/[^\w\sㄱ-ㅎㅏ-ㅣ가-힣]/g, '')
+    .replace(/[^\w\s\u3130-\u318F\uAC00-\uD7A3]/g, '')
     .replace(/\s+/g, ' ')
     .trim();
 }
