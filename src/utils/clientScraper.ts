@@ -927,3 +927,14 @@ export function loadLocalCache(): ClientLyricsCache {
 export function saveLocalCache(cache: ClientLyricsCache): void {
   localStorage.setItem('lyrics_cache', JSON.stringify(cache));
 }
+
+/**
+ * 아티스트명과 곡명을 기반으로 캐시의 고유 키를 생성합니다.
+ * WHY: 플레이리스트 기획안이 변경되면 트랙 번호나 위치가 달라지므로
+ *      트랙 번호(예: 3-0) 대신 곡 고유의 아티스트 + 곡명을 키로 사용하여 캐시 충돌을 방지합니다.
+ */
+export function getSongCacheKey(artist: string, title: string): string {
+  const cleanArtist = artist.trim().toLowerCase().replace(/\s+/g, ' ');
+  const cleanTitle = title.trim().toLowerCase().replace(/\s+/g, ' ');
+  return `${cleanArtist}|||${cleanTitle}`;
+}

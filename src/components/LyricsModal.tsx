@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import type { Track, LyricsData } from '../types';
+import { getSongCacheKey } from '../utils/clientScraper';
 
 interface LyricsModalProps {
   trackNumber: number | null;
@@ -46,7 +47,7 @@ function LyricsModal({
 
   // 3개 레퍼런스 곡 각각에 대한 수집 상태 데이터 목록
   const songLyricsList: LyricsData[] = track.references.map((ref, idx) => {
-    const key = `${trackNumber}-${idx}`;
+    const key = getSongCacheKey(ref.artist, ref.title);
     const entry = localCache[key];
 
     return {

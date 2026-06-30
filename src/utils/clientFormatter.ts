@@ -1,4 +1,5 @@
 import type { Track, LyricsData } from '../types';
+import { getSongCacheKey } from './clientScraper';
 
 export interface LyricEntry {
   artist: string;
@@ -85,7 +86,7 @@ export function formatAllAsMarkdown(
     }
 
     const lyrics: LyricEntry[] = track.references.map((ref, idx) => {
-      const entry = allLyrics[`${track.number}-${idx}`];
+      const entry = allLyrics[getSongCacheKey(ref.artist, ref.title)];
       return {
         artist: ref.artist,
         title: ref.title,
@@ -178,7 +179,7 @@ export function formatAllAsText(
     }
 
     const lyrics: LyricEntry[] = track.references.map((ref, idx) => {
-      const entry = allLyrics[`${track.number}-${idx}`];
+      const entry = allLyrics[getSongCacheKey(ref.artist, ref.title)];
       return {
         artist: ref.artist,
         title: ref.title,
@@ -208,7 +209,7 @@ export function formatAllAsJson(
 
   const data = filteredTracks.map((track) => {
     const songs = track.references.map((ref, idx) => {
-      const entry = allLyrics[`${track.number}-${idx}`];
+      const entry = allLyrics[getSongCacheKey(ref.artist, ref.title)];
       return {
         artist: ref.artist,
         title: ref.title,
@@ -357,7 +358,7 @@ export function printLyricsPdf(
     `;
 
     track.references.forEach((ref, idx) => {
-      const entry = allLyrics[`${track.number}-${idx}`];
+      const entry = allLyrics[getSongCacheKey(ref.artist, ref.title)];
       let lyricsContent = '(가사를 찾을 수 없습니다)';
       
       if (entry?.lyrics) {

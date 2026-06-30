@@ -14,6 +14,7 @@ import {
   loadLocalCache,
   saveLocalCache,
   scrapeSongLyricsClient,
+  getSongCacheKey,
   type ClientLyricsCache
 } from './utils/clientScraper';
 
@@ -157,7 +158,7 @@ function App() {
     const queue: Array<{ trackNum: number; songIdx: number; artist: string; title: string }> = [];
     tracks.forEach((track) => {
       track.references.forEach((ref, idx) => {
-        const key = `${track.number}-${idx}`;
+        const key = getSongCacheKey(ref.artist, ref.title);
         // 아직 가사가 없거나 스크래핑 에러가 난 곡들만 필터링하여 수집
         if (!localCache[key]?.lyrics) {
           queue.push({
@@ -214,7 +215,7 @@ function App() {
 
       try {
         const result = await scrapeSongLyricsClient(item.artist, item.title, geniusToken);
-        const cacheKey = `${item.trackNum}-${item.songIdx}`;
+        const cacheKey = getSongCacheKey(item.artist, item.title);
         
         activeCache = {
           ...activeCache,
@@ -228,7 +229,7 @@ function App() {
           },
         };
       } catch (err) {
-        const cacheKey = `${item.trackNum}-${item.songIdx}`;
+        const cacheKey = getSongCacheKey(item.artist, item.title);
         activeCache = {
           ...activeCache,
           [cacheKey]: {
@@ -272,7 +273,7 @@ function App() {
 
     for (let idx = 0; idx < track.references.length; idx++) {
       const ref = track.references[idx];
-      const cacheKey = `${trackNum}-${idx}`;
+      const cacheKey = getSongCacheKey(ref.artist, ref.title);
 
       try {
         const result = await scrapeSongLyricsClient(ref.artist, ref.title, geniusToken);
@@ -312,7 +313,7 @@ function App() {
     if (!track || !track.references[songIdx]) return;
 
     const ref = track.references[songIdx];
-    const cacheKey = `${trackNum}-${songIdx}`;
+    const cacheKey = getSongCacheKey(ref.artist, ref.title);
     const existingEntry = localCache[cacheKey];
 
     const updatedCache: ClientLyricsCache = {
@@ -340,8 +341,8 @@ function App() {
   // === 수집 완료 통계 ===
   const completedCount = tracks.reduce((acc, t) => {
     let count = 0;
-    t.references.forEach((_, idx) => {
-      const key = `${t.number}-${idx}`;
+    t.references.forEach((ref) => {
+      const key = getSongCacheKey(ref.artist, ref.title);
       if (localCache[key]?.lyrics) count++;
     });
     return acc + count;
@@ -352,8 +353,8 @@ function App() {
   // === TrackWithStatus 변환 (UI 렌더러용 데이터 구성) ===
   const tracksWithStatus: TrackWithStatus[] = filteredTracks.map((track) => {
     let lyricsCount = 0;
-    track.references.forEach((_, idx) => {
-      const key = `${track.number}-${idx}`;
+    track.references.forEach((ref) => {
+      const key = getSongCacheKey(ref.artist, ref.title);
       if (localCache[key]?.lyrics) lyricsCount++;
     });
 
