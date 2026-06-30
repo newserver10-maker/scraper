@@ -7,6 +7,7 @@ const GENIUS_API_BASE = 'https://api.genius.com';
 // WHY: Genius에는 한국 아티스트가 영문명으로만 등록되어 있거나, 한글/영문 혼용으로 
 //      등록되어 있어 단순 토큰 매칭이 불가능한 경우가 많으므로 하드코딩 매핑 사전을 둡니다.
 const ARTIST_TRANSLATION_MAP: Record<string, string[]> = {
+  // === 기존 14번 플레이리스트 아티스트 ===
   '검정치마': ['the black skirts', 'black skirts'],
   '오존': ['o3ohn'],
   '아이유': ['iu'],
@@ -17,7 +18,7 @@ const ARTIST_TRANSLATION_MAP: Record<string, string[]> = {
   '방탄소년단': ['bts'],
   '적재': ['jukjae'],
   '이소라': ['lee sora', 'lee so ra'],
-  '10cm': ['십센치'],
+  '10cm': ['십센치', '10 cm', 'ten centimeters'],
   '선우정아': ['sunwoojunga', 'sunwoo junga'],
   '새소년': ['se so neon', 'sesoneon'],
   '기리보이': ['giriboy'],
@@ -38,6 +39,22 @@ const ARTIST_TRANSLATION_MAP: Record<string, string[]> = {
   '디오': ['d.o.', 'do', 'd.o. (exo)'],
   '루시드폴': ['lucid fall'],
   '유라': ['youra', 'youra (유라)'],
+
+  // === V4 16번 플레이리스트 신규 아티스트 ===
+  '죠지': ['george'],
+  '페퍼톤스': ['peppertones'],
+  '토마스 쿡': ['thomas cook'],
+  '브로콜리너마저': ['broccoli you too', 'even broccoli'],
+  '가을방학': ['autumn vacation'],
+  '장범준': ['jang beom jun', 'jang bumjun'],
+  '서사무엘': ['samuel seo'],
+  '지소울': ['gsoul', 'g.soul', 'g-soul'],
+  '소히': ['sohi'],
+  '나희경': ['na hee kyung', 'na heekyung'],
+  '요조': ['yozoh'],
+  '브루노 메이저': ['bruno major'],
+  '딘': ['dean'],
+  '92914': ['92914'],
 };
 
 // === 다이어크리틱(액센트) 제거 ===
@@ -49,16 +66,18 @@ function removeDiacritics(str: string): string {
 // WHY: 기획안 자체에 아예 엉뚱한 정보로 잘못 기록되어 물리적으로 음원 검색이 불가능한 
 //      극소수의 곡에 한해서만 최소한의 매핑 사전을 유지합니다.
 //      (예: '림킴 - 민들레'는 멜론/Genius 모두에 실재하지 않는 곡이며 실제 곡은 'Awoo'임)
+// WHY: 기획안에 기록된 곡명이 실제 음원 DB에 등록된 곡명과 다를 때만 보정합니다.
+//      V4 기획안에서는 '낭만파', '보이지 않는 날들' 등이 실제 곡명으로 사용되므로
+//      해당 항목들을 제거하고, 14번 플레이리스트 전용 보정만 유지합니다.
 const SONG_TITLE_CORRECTION_MAP: Record<string, string> = {
-  '낭만파': '명왕성',
-  '보이지 않는 날들': '봄눈',
-  '민들레': 'awoo',
-  '하류': 'ral 9002',
+  '민들레': 'awoo',       // 림킴의 실제 곡명은 Awoo
+  '하류': 'ral 9002',     // 유라(youra)의 실제 곡명
 };
 
 const ARTIST_NAME_CORRECTION_MAP: Record<string, string> = {
   'sigur ros': 'sigur rós',
   '유라': 'youra',
+  '브루노 메이저': 'bruno major',  // V4 괄호 표기 '브루노 메이저 (Bruno Major)' 대응
 };
 
 // === 한글 로마자 변환기 ===

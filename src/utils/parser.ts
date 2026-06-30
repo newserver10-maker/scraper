@@ -224,8 +224,35 @@ function extractReferenceSongs(refText: string): Song[] {
   // WHY: 첫 번째 대시의 앞부분이 첫 번째 아티스트,
   //      첫 번째 대시의 뒷부분에서 두 번째 대시 앞의 마지막 콤마까지가 첫 번째 곡명,
   //      그 콤마 이후가 두 번째 아티스트... 이런 식으로 연쇄 분리합니다.
+  //
+  // ⚠️ 콤마 보호 규칙: 콤마 뒤의 텍스트가 유효한 아티스트명이 아닌 경우
+  //    (= 다음 대시가 없거나, 콤마~다음 대시 사이 텍스트가 3자 이하인 경우)
+  //    해당 콤마는 곡명의 일부로 간주합니다.
+  //    예: "검정치마 - 기다린 만큼, 더, 오존 (O3ohn) - Down"에서
+  //        "만큼" 뒤 콤마 → "더" (3자 이하) → 곡명의 일부
+  //        "더" 뒤 콤마 → "오존 (O3ohn)" (다음 대시 존재) → 유효한 아티스트명 구분자
   
   const songsRaw: Array<{ artist: string; title: string }> = [];
+  
+  /**
+   * 콤마 위치가 곡 구분자인지 곡명의 일부인지 판별하는 헬퍼 함수
+   * WHY: "기다린 만큼, 더" 같은 곡명의 콤마를 구분자로 오인하면
+   *      파싱 체인 전체가 붕괴되므로, 콤마 뒤 텍스트가 실제 아티스트명으로
+   *      기능할 수 있는지를 다음 대시의 존재 여부로 전방 검증합니다.
+   */
+  function isValidSplitComma(commaAbsPos: number, nextDashIdx: number): boolean {
+    if (nextDashIdx < 0 || nextDashIdx >= dashPositions.length) {
+      // 다음 대시가 없으면 이 콤마 뒤에 "아티스트 - 곡명" 구조가 올 수 없음
+      return false;
+    }
+    // 콤마 뒤 텍스트 ~ 다음 대시 앞 텍스트 = 예상 아티스트명
+    const candidateArtist = cleaned.substring(commaAbsPos + 1, dashPositions[nextDashIdx].index).trim();
+    // 아티스트명이 너무 짧으면(한 글자, 조사 수준) 곡명의 일부로 판단
+    if (candidateArtist.length <= 1) return false;
+    // 아티스트명이 순수 숫자+단위 없는 1자리 숫자면 곡명의 일부
+    if (/^\d$/.test(candidateArtist)) return false;
+    return true;
+  }
   
   for (let i = 0; i < dashPositions.length; i++) {
     const dashPos = dashPositions[i];
@@ -235,16 +262,30 @@ function extractReferenceSongs(refText: string): Song[] {
     if (i === 0) {
       artistStart = 0;
     } else {
-      // 이전 대시 이후의 텍스트에서 마지막 콤마를 찾아 그 이후부터 시작
+      // 이전 대시 이후의 텍스트에서 유효한 마지막 콤마를 찾아 그 이후부터 시작
       const prevDashEnd = dashPositions[i - 1].index + dashPositions[i - 1].length;
       const betweenText = cleaned.substring(prevDashEnd, dashPos.index);
       
-      // 콤마로 구분된 마지막 요소가 현재 아티스트명
-      const lastCommaIdx = betweenText.lastIndexOf(',');
-      if (lastCommaIdx !== -1) {
-        artistStart = prevDashEnd + lastCommaIdx + 1;
+      // 콤마로 구분된 마지막 유효 요소가 현재 아티스트명
+      // WHY: 뒤에서부터 콤마를 탐색하며, 해당 콤마가 유효한 분할점인지 검증
+      let lastValidCommaIdx = -1;
+      let searchFrom = betweenText.length;
+      while (searchFrom > 0) {
+        const commaIdx = betweenText.lastIndexOf(',', searchFrom - 1);
+        if (commaIdx === -1) break;
+        
+        const commaAbsPos = prevDashEnd + commaIdx;
+        if (isValidSplitComma(commaAbsPos, i)) {
+          lastValidCommaIdx = commaIdx;
+          break;
+        }
+        searchFrom = commaIdx;
+      }
+      
+      if (lastValidCommaIdx !== -1) {
+        artistStart = prevDashEnd + lastValidCommaIdx + 1;
       } else {
-        // 콤마가 없으면 마침표(.) 뒤의 마지막 구분점을 찾기
+        // 유효한 콤마가 없으면 마침표(.) 뒤의 마지막 구분점을 찾기
         // WHY: "Radiohead - Lift. 다음 아티스트 - 곡명" 형식 대응
         const lastDotIdx = betweenText.lastIndexOf('.');
         if (lastDotIdx !== -1 && lastDotIdx < betweenText.length - 2) {
@@ -265,15 +306,29 @@ function extractReferenceSongs(refText: string): Song[] {
       // 마지막 곡이면 텍스트 끝까지
       titleEnd = cleaned.length;
     } else {
-      // 다음 대시 앞의 마지막 콤마가 곡명의 끝
+      // 다음 대시 앞의 마지막 유효 콤마가 곡명의 끝
       const nextDashPos = dashPositions[i + 1];
       const betweenText = cleaned.substring(titleStart, nextDashPos.index);
-      const lastCommaIdx = betweenText.lastIndexOf(',');
       
-      if (lastCommaIdx !== -1) {
-        titleEnd = titleStart + lastCommaIdx;
+      // 뒤에서부터 유효한 콤마를 탐색
+      let lastValidCommaIdx = -1;
+      let searchFrom = betweenText.length;
+      while (searchFrom > 0) {
+        const commaIdx = betweenText.lastIndexOf(',', searchFrom - 1);
+        if (commaIdx === -1) break;
+        
+        const commaAbsPos = titleStart + commaIdx;
+        if (isValidSplitComma(commaAbsPos, i + 1)) {
+          lastValidCommaIdx = commaIdx;
+          break;
+        }
+        searchFrom = commaIdx;
+      }
+      
+      if (lastValidCommaIdx !== -1) {
+        titleEnd = titleStart + lastValidCommaIdx;
       } else {
-        // 콤마가 없으면 마침표(.) 기준으로 분리
+        // 유효한 콤마가 없으면 마침표(.) 기준으로 분리
         const lastDotIdx = betweenText.lastIndexOf('.');
         if (lastDotIdx !== -1 && lastDotIdx < betweenText.length - 2) {
           titleEnd = titleStart + lastDotIdx;

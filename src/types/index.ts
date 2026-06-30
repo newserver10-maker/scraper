@@ -24,6 +24,7 @@ export interface LyricsData {
   geniusUrl: string | null;
   scrapedAt: string | null;
   error: string | null; // 실패 시 에러 메시지 보존 — 디버깅용
+  isManual?: boolean;   // 사용자가 수동으로 입력/편집한 가사인지 여부
 }
 
 // 트랙 + 수집 상태 — UI에서 진행 상황을 시각적으로 표시하기 위한 확장 타입

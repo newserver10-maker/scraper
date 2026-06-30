@@ -305,6 +305,33 @@ function App() {
     }
   };
 
+  // === 수동 가사 저장 핸들러 ===
+  // WHY: 자동 스크래핑에 실패한 곡을 사용자가 직접 가사를 입력/편집하여 채울 수 있도록 지원
+  const handleManualSave = useCallback((trackNum: number, songIdx: number, lyrics: string) => {
+    const track = tracks.find((t) => t.number === trackNum);
+    if (!track || !track.references[songIdx]) return;
+
+    const ref = track.references[songIdx];
+    const cacheKey = `${trackNum}-${songIdx}`;
+    const existingEntry = localCache[cacheKey];
+
+    const updatedCache: ClientLyricsCache = {
+      ...localCache,
+      [cacheKey]: {
+        artist: ref.artist,
+        title: ref.title,
+        lyrics: lyrics,
+        geniusUrl: existingEntry?.geniusUrl ?? null, // 기존 URL 보존
+        scrapedAt: new Date().toISOString(),
+        error: null,
+        isManual: true, // 수동 입력 플래그
+      },
+    };
+
+    setLocalCache(updatedCache);
+    saveLocalCache(updatedCache);
+  }, [tracks, localCache]);
+
   // === 블록 필터링 ===
   const filteredTracks = activeBlock === 'all'
     ? tracks
@@ -491,6 +518,7 @@ function App() {
         localCache={localCache}
         onClose={() => setSelectedTrack(null)}
         onScrapeTrack={handleScrapeSingleTrack}
+        onManualSave={handleManualSave}
       />
 
       {/* 다운로드 슬라이드업 패널 */}
